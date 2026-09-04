@@ -30,7 +30,7 @@ Siblings and their roles:
   contract below. `myscripts/lognormal_mocks_diagnostics/pk_bin_patches.py` and
   `diagnose_realization.py` are the shell-level validation instruments.
 
-Remote: none yet (local repo). Intended home `github.com/jrcheshire/logunusual`.
+Remote: `github.com/jrcheshire/logunusual` (pushed 2026-09-04).
 
 ## Build / test / run
 
