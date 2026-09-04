@@ -5,8 +5,10 @@ CUDA), vectorised per-cell galaxy sampling, streamed parquet output. A drop-in
 producer of the per-bin lognormal mock catalogs used by the SPHEREx L4 systematics
 null tests, replacing the LogNormalGalaxies / LogNormalSimulations (Julia) path.
 
-Status: **M0 bootstrap** (bin table + seed schedule only; no generator yet). See
-`ROADMAP.md` for milestones and `CLAUDE.md` for the product contract.
+Status: **M1 periodic-box core** (spectrum -> lognormal fields -> Poisson catalog with
+plane-parallel RSD -> validated P(k) multipoles; no shells / mask / parquet yet). See
+`ROADMAP.md` for milestones and gates and `CLAUDE.md` for the construction and the
+product contract.
 
 ## Install
 
@@ -23,6 +25,9 @@ On a CUDA machine: `pixi install` then `pixi run -e gpu setup-gpu`, and use
 
 - `logunusual/suite.py` -- the v28 seven-bin table, seed schedule, mask and
   distance-cosmology constants (single source of truth).
+- `logunusual/{grid,pk,field,sample,validate,gates}.py` -- the periodic-box generator
+  and its validation (see `CLAUDE.md`).
+- `scripts/m1_*.py` -- gate tables, cross-process reproducibility, memory profile.
 - `docs/landscape.md` -- literature and code landscape.
 - `ROADMAP.md` -- master plan with acceptance gates per milestone.
 

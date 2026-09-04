@@ -35,29 +35,45 @@ Repo skeleton (pixi, hatchling, default + gpu envs), `suite.py` (v28 bin table, 
 schedule, constants) with 7 invariant tests, `CLAUDE.md`, this file, `docs/landscape.md`
 with citations checked against their abstract pages.
 
-## M1 -- Periodic-box core
+## M1 -- Periodic-box core  [done 2026-09-04]
 
-**Build:** `pk.py` (TSV loader, power-law extrapolation, P -> xi -> log1p -> P_G by
-FFTLog, plus the 3D-FFT route Henry uses for gridded input), `field.py` (coloured Gaussian
-field, lognormal transform with box-mean normalisation, sinc^-p voxel-window correction,
-displacement field), `sample.py` (per-cell intensity, Poisson counts, triangular-jitter
-placement, 3x3x3 cell-velocity stencil, plane-parallel RSD), `validate.py` (periodic CIC
-P(k) monopole/quadrupole with shot subtraction; Poisson self-check). Fast tests on
-32^3-64^3 boxes; `slow` marker for the statistical gates. CI (lint + tests) added here.
+**Built:** `grid.py`, `pk.py` (grid-native P -> P_G), `field.py` (JAX, eager),
+`sample.py`, `validate.py` (CIC multipoles, Jing shot noise, coherent-alias estimator
+response), `gates.py`; 44 fast tests + 5 slow gates (`tests/test_gates_m1.py`), CI
+(lint + full suite), `scripts/m1_{gates,reproducibility,memory}.py`. Construction and
+the measurements behind it: `CLAUDE.md` "Construction".
 
-**Gates:**
-- P_G route agreement: FFTLog vs 3D-FFT P_G(k) agree to the FFTLog's own self-convergence
-  (halve the log-grid spacing and take the change as the tolerance), and to Henry's
-  TwoFAST P_G(k) dumped from Julia for the bin-5 TSV over the k range the grid uses.
-- Monopole: P_0(k) / (b^2 P_in(k)) = 1 within the ensemble standard error over
-  k < k_Nyq / 2, with the seed count chosen so the SE resolves 2%.
-- Quadrupole: P_2 / P_0 equals the Kaiser prediction at the same tolerance
-  (plane-parallel).
-- Density: realized / target nbar = 1 within Poisson on the box.
-- Reproducibility: same seed -> bit-identical catalog on CPU across two runs; CPU vs CUDA
-  agreement recorded in ULPs, not asserted bitwise.
-- Memory: peak *allocation* (not RSS) of the 512^3 field stage measured and recorded with
-  the grid count it corresponds to.
+**Gates as run (128^3, L = 1000, dx = 7.8, bin-5 b and f, nbar 3e-3, estimator mesh
+2x; bands hold >= n_min independent modes so SE <= 2%/3):**
+
+| gate | statistic | band | result (2026-09-04, M4 laptop) |
+|---|---|---|---|
+| G1 | grid Hankel pair, round trip, 2nd-order expansion, spline nodes/tails | -- | exact (fast tests: atol 1e-10, rtol 1e-12, eps^3 scaling) |
+| G2 | Gaussian colouring `<P(G)>/P_G` | all shells, 32^3 x 48 | max |z| < 4.5, mean z^2 = 1.2 (fast test) |
+| G3 | lognormal grid identity `<P(delta)>/P_grid`, galaxy and matter | every band to k_Nyq, 192 seeds | max |z| 2.0 (galaxy), 2.2 (matter); SE 0.2-0.5%; 0 clipped modes |
+| G4a | uniform catalog / Jing shot, deconvolved | to k_Nyq, 32 seeds | max |z| 2.3; SE 0.1-0.6% |
+| G4b | fixed field: catalog / exact prediction incl. coherent aliases | to k_Nyq (and to est. Nyquist), 16 draws | max |z| 3.3 in 52 bands; SE 0.1-0.3% |
+| G5 | real-space `(P0 - shot) / (b^2 P_in x response)` | k < k_Nyq/2, 32 seeds | max |z| 2.1; SE 0.3-0.6%; vs fixed-field prediction max |z| 1.9, SE 0.1% |
+| G6 | `P2/P0 / Kaiser(f/b)`, P_in x 1e-2 arm (64^3, L 500, nbar 0.1) | k < k_Nyq/2, 32 seeds | max |z| 3.3, SE 2-4%; nonlinear budget 0.4% |
+| G6 | same at production amplitude, lowest band | k = 0.035 | 0.995 +- 0.031 (measurement: 1.25x Kaiser by k = 0.19; `P_gm/(b P_mm)` 0.993 -> 0.965) |
+| G7 | `sum counts` vs `sum lambda`; `sum lambda / nbar V` | 32 seeds | z mean -0.03, std 0.78; exact to 1e-15 |
+| G8 | two processes, same seed | 32^3, 64^3 | identical bytes on macOS-arm64 (asserted on Linux in CI) |
+| G9 | peak live JAX bytes, field stage | 128^3, 256^3 | 5.5 x N^3 float64 both (during the matter-field step; 0.69 GiB at 256^3, so 5.5 GiB projected at 512^3); XLA scratch not seen; 512^3 and CUDA in M3 |
+
+
+**Gate re-derivations (JC to confirm; nothing was loosened, two premises were wrong):**
+- *Monopole target.* The catalog has `b^2 P_in` in its first zone, but a CIC estimator
+  on a finite mesh sees the lattice-periodic images coherently (`validate.effective_window`,
+  exact, separable); the gate compares to `b^2 P_in x estimator_response`, and the
+  fixed-field gate G4b verifies that response to the estimator Nyquist.
+- *Quadrupole.* "P2/P0 = Kaiser over k < k_Nyq/2 at the same tolerance" assumed linear
+  RSD; at production amplitude the mapping is nonlinear (`f Psi_rms` = 3.2 Mpc/h, so
+  `k f Psi` = 0.6 at k = 0.19) and the galaxy-matter correlation of the lognormal pair is
+  below 1 at finite k. Kaiser is asserted in a scaled-amplitude arm (`P_in x 1e-2`, where
+  the nonlinear term is budgeted at `(k f Psi_rms)^2`), in the lowest production band,
+  and MEASURED elsewhere (tables in the gate script output).
+- *Reproducibility.* Bitwise asserted on Linux (CI); characterised on macOS.
+- *CPU vs CUDA in ULPs:* moved to M3 (needs a deneb session; decided 2026-09-04).
 
 ## M2 -- Shell product and drop-in integration
 
@@ -82,7 +98,9 @@ row groups, bin-contiguous concatenation, provenance metadata), the 7-bin driver
 ## M3 -- Performance and memory
 
 Per-bin wall and peak allocation on the laptop, on deneb's RTX 3050 (8 GB: float32 fields
-or slab FFTs), and one TACC GPU node, tabulated against the Julia baseline above. Targets
+or slab FFTs), and one TACC GPU node, tabulated against the Julia baseline above. CPU vs
+CUDA agreement of the field stage recorded in ULPs (moved here from M1); `jax.jit` of
+the field stage with a bitwise-before-jit check. Targets
 are measured, not asserted: a 512^3 bin under 15 GB; a 7-bin realization on the laptop in
 single-digit minutes with parquet I/O as the floor. Any regression-guarding number lives
 in a test that states what it measured and on which machine.
@@ -108,9 +126,15 @@ prod_v2 is retired are JC's call; not scheduled here.
 ## Known risks / open questions
 
 - The prod_v2 1.28x over-density is consistent with the LogNormalGalaxies 0.9.4 -> 0.10
-  voxel-window-correction default flip (count ratios 1.263 / 1.281 on bins 1 / 5) but not
-  proven; a 0.11.0 arm with the correction off would close it. JC's call, also on
-  reporting it to Henry.
+  voxel-window-correction default flip (count ratios 1.263 / 1.281 on bins 1 / 5), and
+  M1 measured the mechanism: the post-transform `sinc^-2` deconvolution leaves 27% of the
+  expected galaxies in cells with `1 + delta < 0` at bin-5 settings. Not proven on
+  prod_v2 itself; a 0.11.0 arm with the correction off would close it. JC's call, also
+  on reporting it to Henry.
+- Attainability of the deconvolved target (`P/sinc^2`, uniform placement) for the v28
+  bins at their production grids (measured 2026-09-04, `grid_pkG` diagnostics): bins 1-6
+  zero clipped modes, `xi_min` > -0.004; bin 7 (b = 3.29, dx 15.6) clips 5 of 67M modes
+  carrying 1e-8 of the power. Grid sigma^2 of the galaxy field 2.3-3.3, matter 0.26-2.8.
 - prod_v2's growth rates come from astropy Planck18 (Om0 = 0.30966) while its distances
   use Om0 = 0.3153; `suite.py` keeps the literals for drop-in fidelity. Reconciling is an
   M4 decision.
