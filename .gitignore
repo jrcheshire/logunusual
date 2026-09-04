@@ -1,0 +1,20 @@
+# pixi env (JAX is pip-installed in here by `pixi run setup`; never commit, rebuild instead)
+.pixi/
+*.egg-info/
+
+# byte-compiled
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# generated outputs / mock data / input tables
+data/
+outputs/
+runs/
+*.parq
+*.parquet
+*.npz
+*.png

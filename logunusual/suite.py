@@ -1,0 +1,127 @@
+"""The SPHEREx per-bin lognormal suite: bin table, seed schedule, fixed conventions.
+
+This is the single source for the v28-driven 7-bin design that produced `prod_v2`.
+The same table is duplicated (with drift risk) in
+`SPHEREx-L4-Cosmology-Pipeline/systematics/lognormal_mocks/generate_config.py`
+(`BIN_SUITE_v28`), `myscripts/lognormal_mocks_diagnostics/pk_bin_patches.py`
+(`BIN_INFO`) and `myscripts/project_lognormal_transfer_cl.py` (`V28_*`); milestone
+M2 points those at this module.
+
+Provenance of the numbers (all copied verbatim from `generate_config.py`,
+2026-09-04):
+
+- `z_eff`, `rmin`, `rmax`: shell edges in comoving Mpc/h from
+  FlatLambdaCDM(H0=67.36, Om0=0.3153), the cosmology of the CAMB matter-power TSVs.
+- `nbar`: sum over the five sigma_z/(1+z) < 0.2 bins of the v28 forecast density
+  (`galaxy_density_v28_base_cbe.txt`); `b`: numdens-weighted mean v28 bias.
+- `L_box`: fits `2 * (rmax + RADIAL_BUFFER)`; `N_grid`: keeps the cell 8-16 Mpc/h.
+- `f`: the growth rate written into the prod_v2 configs. It was computed as
+  `astropy.cosmology.Planck18.Om(z_eff) ** 0.55`, and astropy's Planck18 has
+  Om0 = 0.30966 with a 0.06 eV neutrino, NOT the Om0 = 0.3153 of the distance
+  cosmology (the chimera comment claiming they agree is wrong). The values are
+  stored as literals so the drop-in contract is exact; the two cosmologies
+  differ in f by 0.4-0.9% across the bins, which is a documented inconsistency
+  of prod_v2, not something this package silently corrects.
+"""
+
+from dataclasses import dataclass
+
+#: `seed = SEED_BASE + realization * 1000 + bin_index` (run_bin_suite.py default).
+SEED_BASE = 137_000_000
+SEED_REALIZATION_STRIDE = 1000
+
+#: Buffer (Mpc/h) added on both sides of each shell when the box is drawn.
+RADIAL_BUFFER = 150.0
+
+#: Distance cosmology behind rmin/rmax and the matter-power tables.
+H0_DISTANCE = 67.36
+OMEGA_M_DISTANCE = 0.3153
+
+#: Survey mask contract: HEALPix NSIDE 128, NESTED, int8 dataset `MASK`, fsky 0.7127.
+MASK_NSIDE = 128
+MASK_ORDERING = "NESTED"
+MASK_DATASET = "MASK"
+
+
+@dataclass(frozen=True)
+class Bin:
+    name: str
+    index: int  # 1-based; this is the value written to the parquet `bin` column
+    z_min: float
+    z_max: float
+    z_eff: float
+    rmin: float  # Mpc/h
+    rmax: float  # Mpc/h
+    L_box: float  # Mpc/h
+    N_grid: int
+    nbar: float  # (Mpc/h)^-3, v28 nominal
+    b: float
+    f: float  # growth rate as used by prod_v2 (see module docstring)
+
+    @property
+    def cell(self) -> float:
+        """Grid spacing in Mpc/h."""
+        return self.L_box / self.N_grid
+
+    @property
+    def k_nyquist(self) -> float:
+        """pi / cell, in h/Mpc."""
+        import math
+
+        return math.pi / self.cell
+
+    @property
+    def matterpower_file(self) -> str:
+        """Relative path convention of the CAMB linear P(k) TSV for this bin."""
+        return f"data/matterpower_camb_zeff={self.z_eff:g}.tsv"
+
+
+# Growth rates as written into the prod_v2 configs (astropy Planck18 Om(z)**0.55; see
+# the module docstring for why these are literals and not recomputed).
+_F_PROD_V2 = {
+    0.10: 0.581925899217631,
+    0.30: 0.6797684347521443,
+    0.50: 0.7557107920438596,
+    0.70: 0.8127713696136714,
+    0.90: 0.8550542749312783,
+    1.30: 0.9096055989924714,
+    1.90: 0.950584507968171,
+}
+
+# fmt: off
+# name, index, z_min, z_max, z_eff, rmin, rmax, L_box, N_grid, nbar, b
+_ROWS = (
+    ("bin01", 1, 0.0, 0.2, 0.10,    0.000,  568.215, 1500, 192, 7.347e-2, 1.03),
+    ("bin02", 2, 0.2, 0.4, 0.30,  568.215, 1077.778, 2500, 256, 4.166e-2, 1.32),
+    ("bin03", 3, 0.4, 0.6, 0.50, 1077.778, 1530.733, 3500, 384, 1.556e-2, 1.45),
+    ("bin04", 4, 0.6, 0.8, 0.70, 1530.733, 1931.840, 4500, 448, 1.140e-2, 1.57),
+    ("bin05", 5, 0.8, 1.0, 0.90, 1931.840, 2287.330, 5000, 512, 8.482e-3, 1.76),
+    ("bin06", 6, 1.0, 1.6, 1.30, 2287.330, 3139.330, 7000, 512, 1.808e-3, 2.22),
+    ("bin07", 7, 1.6, 2.2, 1.90, 3139.330, 3764.808, 8000, 512, 3.491e-4, 3.29),
+)
+# fmt: on
+
+BIN_SUITE_V28 = tuple(Bin(*row, f=_F_PROD_V2[row[4]]) for row in _ROWS)
+
+
+def seed_for(realization: int, bin_index: int, base: int = SEED_BASE) -> int:
+    """The prod_v2 seed schedule: `base + realization * 1000 + bin_index`.
+
+    The stride-1000 layout is what keeps realizations from colliding; both
+    arguments are bounded so a collision cannot happen silently.
+    """
+    if not 0 <= realization < SEED_REALIZATION_STRIDE:
+        raise ValueError(
+            f"realization must be in [0, {SEED_REALIZATION_STRIDE}), got {realization}"
+        )
+    if not 0 < bin_index < SEED_REALIZATION_STRIDE:
+        raise ValueError(
+            f"bin_index must be in (0, {SEED_REALIZATION_STRIDE}), got {bin_index}"
+        )
+    return base + realization * SEED_REALIZATION_STRIDE + bin_index
+
+
+def omega_m_flat_lcdm(z: float, omega_m0: float) -> float:
+    """Omega_m(z) for a flat LCDM background without radiation or neutrinos."""
+    a3 = (1.0 + z) ** 3
+    return omega_m0 * a3 / (omega_m0 * a3 + 1.0 - omega_m0)
