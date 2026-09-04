@@ -61,7 +61,7 @@ the measurements behind it: `CLAUDE.md` "Construction".
 | G9 | peak live JAX bytes, field stage | 128^3, 256^3 | 5.5 x N^3 float64 both (during the matter-field step; 0.69 GiB at 256^3, so 5.5 GiB projected at 512^3); XLA scratch not seen; 512^3 and CUDA in M3 |
 
 
-**Gate re-derivations (JC to confirm; nothing was loosened, two premises were wrong):**
+**Gate re-derivations (approved by JC 2026-09-04; nothing was loosened, two premises were wrong):**
 - *Monopole target.* The catalog has `b^2 P_in` in its first zone, but a CIC estimator
   on a finite mesh sees the lattice-periodic images coherently (`validate.effective_window`,
   exact, separable); the gate compares to `b^2 P_in x estimator_response`, and the
@@ -75,25 +75,72 @@ the measurements behind it: `CLAUDE.md` "Construction".
 - *Reproducibility.* Bitwise asserted on Linux (CI); characterised on macOS.
 - *CPU vs CUDA in ULPs:* moved to M3 (needs a deneb session; decided 2026-09-04).
 
-## M2 -- Shell product and drop-in integration
+## M2 -- Shell product  [done 2026-09-04]
 
-**Build:** `shell.py` (shell padded by 150 Mpc/h, HEALPix NSIDE-128 NESTED int8 mask at
-cell level, observer at the origin, radial RSD), `io.py` (streamed parquet, pinned 2^20
-row groups, bin-contiguous concatenation, provenance metadata), the 7-bin driver in
-`suite.py` with the prod_v2 seed schedule, `cli.py`.
+Direction (JC, 2026-09-04): this is a lognormal mock code, not a survey code. The v28
+table and a survey mask are default INPUTS; no other repository is touched, depended
+on, or used as a gate; the catalog layout is this package's own format spec; every
+gate is an identity, a limit, or a Poisson statement.
 
-**Gates:**
-- Schema test identical to chimera's `tests/test_mock_coverage_thinning.py` fixture:
-  `x, y, z: double`, `bin: int8`, bins ascending and contiguous, row groups byte-contiguous
-  per bin.
-- `pk_bin_patches.py` runs unmodified on a logunusual realization: shell nbar / nominal =
-  1.00 within Poisson in every bin; T^2(k) shape consistent with the Julia bin-5 curve
-  (same grid ceiling); its Poisson self-check passes.
-- `diagnose_realization.py` passes; `contaminate_catalog.py` + `run_field_level.py` run
-  end to end on one realization.
-- The single chimera PR of this milestone: `--nbar-overdensity-factor` becomes
-  metadata-driven (default 1.0 when `realized_nbar` is stamped), and the three copies of
-  the v28 table import `logunusual.suite`.
+**Built:** `field.py` (three displacement components, `psi_axes`), `shell.py`
+(observer-centred box, cell-level buffered radial window, `AngularMask` for any
+HEALPix NSIDE in NESTED or RING, inclusive shell cut, own-cell radial RSD, streamed
+`sample_shell`), `io.py` (`CatalogWriter` with pinned row groups that never mix bins,
+atomic rename, `check_layout`, `read_bin`), `config.py` (`RunConfig`, YAML, bins
+default to the suite, `nbar_scale` / `grid_scale`, `config_hash`), `run.py`
+(`generate_realization`, `summary.json`, per-bin metadata), `cli.py` (`run`, `check`,
+`default-config`; console script), `configs/v28_default.yaml`; 74 fast tests + 2 slow
+gates (`tests/test_gates_m2.py`), `scripts/m2_gates.py`. Construction: `CLAUDE.md`
+"Shell product" and "Catalog format".
+
+**Gates (fast, exact):** divergence identity `sum_i k_i Psi_i,k = i delta_k`; the z
+path bitwise equal to M1; cell window vs brute force and vs the continuum shell volume
+(bounded by the boundary-cell layer); selection identity against an independent
+`ang2pix` reference with inclusive edges; radial RSD parallel to `x_hat` with the
+projected displacement, `f = 0` identity, on-axis equal to plane-parallel, and the
+far-observer limit `|Delta| <= 3 f |Psi| |x| / D` shrinking with `D`; galaxies cross
+the shell edges in both directions; **uniform-field Poisson gate**: with `P_in x 1e-4`
+the kept count is `Poisson(nbar fsky V_shell)` exactly, `|z| < 4`, through
+`sample_shell` and through the whole driver (window, RSD, mask, writer); draws over
+the window vs `sum(lambda)`; chunk invariance (bit-identical positions, byte-identical
+files); layout self-check, metadata round trip, empty bin; two processes -> identical
+bytes (asserted on Linux, characterised on macOS); CLI dry-run writes nothing.
+
+**Slow gates (128^3, L = 1000, dx = 7.8, bin-5 b and f, nbar 3e-3; the shell is bin
+5 scaled by 1/5: [386.4, 457.5] +- 30, mask an equatorial band fsky 0.70):**
+
+| gate | statistic | band | result (2026-09-04, M4 laptop) |
+|---|---|---|---|
+| G10 | `N_kept / (nbar fsky V_shell)` at production amplitude | 16 seeds | 0.9964 +- 0.0040 (z = -0.9); SE is the shell-scale sample variance, consistency gate |
+| G10 | `n(r) / nbar` in 8 sub-shells incl. both edges | 16 seeds | max |z| 2.5, SE 0.6-0.9%; edge sub-shells 0.9955 +- 0.0075 and 0.9984 +- 0.0092 |
+| G10 | draws over the window vs `sum lambda` | 16 seeds | z mean +0.03, std 0.98; 3 galaxies left the box (all beyond rmax + buffer, never kept) |
+| G11 | 1x mesh: `(P0 - shot) / (b^2 P_in x response)` | k < k_Nyq/2, 64 seeds on the 32-seed bands of G5 | max |z| 2.0; SE 0.2-0.5% (with bands re-derived per seed count, 32/48/64 seeds all left one band at 0.68-0.74% SE: the lognormal scatter is super-Gaussian, so `band_seeds` fixes the bands and the seeds bring the SE down) |
+| G11 | 1x mesh: vs the fixed-field prediction | k < k_Nyq/2, 64 seeds | max |z| 2.5; SE 0.08-0.11% (|z| up to 43 before the sign fix) |
+
+**Finding (G11).** M1's coherent-alias formula omitted the sign `(-1)^(r n)` that the
+half-cell offset of the cell centres puts on alias image `n` of a mesh with ratio `r`.
+Every sign is + for an even ratio, so the 2x gates (G4b, G5) could not see it; on the
+generator's own mesh the dominant image subtracts and the deconvolved power reads 6%
+low at half the Nyquist (shell average; 11% along an axis). With the sign the
+fixed-field arm went from |z| up to 43 to max 2.8. `validate.effective_window` carries
+the sign; pinned by a fast test against the hand sum.
+
+**Acceptance run (2026-09-04, M4 Max laptop, CPU, `runs/v28_full.yaml`: the seven-bin
+default at full density with the survey mask, realization 0):** 651,427,904 galaxies,
+15.04 GiB parquet, **187 s wall**; host peak RSS 19.3 GB (`/usr/bin/time -l`), peak
+live JAX bytes 7.0 GiB = **7.0 x N^3 float64** in every bin (512^3 bins; delta_g +
+delta_m_k + three Psi + FFT scratch). `logunusual check`: layout ok, realized/target
+1.0077, 1.0018, 0.9988, 0.9991, 1.0004, 0.9993, 1.0011 for bins 1-7. Per bin (field /
+sample): 192^3 1.0 / 9.2 s; 256^3 1.5 / 27.8 s; 384^3 3.8 / 24.6 s; 448^3 6.0 / 29.2 s;
+512^3 8.2 / 30.7 s, 8.0 / 21.8 s, 7.9 / 7.2 s. The sample stage (Poisson draw,
+placement, radial RSD, mask lookup, parquet) is 80% of the wall; 1.55e9 galaxies drawn
+for 6.5e8 kept (the full-sky buffered window vs the masked shell). Against the Julia
+reference at bin 5 (255 s / 75 GB for one bin): 39 s / 7 GiB live. Bins 1-2 had 87 and
+40 galaxies leave the box (beyond `rmax + buffer`, never kept); the others 0.
+
+**Not gated in M2:** the redshift-space statistics of the radial mapping (a
+wide-angle estimator is not part of the package); the geometry is exact by the tests
+above and the plane-parallel physics is M1 G6.
 
 ## M3 -- Performance and memory
 

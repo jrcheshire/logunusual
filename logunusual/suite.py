@@ -1,11 +1,10 @@
-"""The SPHEREx per-bin lognormal suite: bin table, seed schedule, fixed conventions.
+"""The default bin table, seed schedule and constants (dependency-free).
 
-This is the single source for the v28-driven 7-bin design that produced `prod_v2`.
-The same table is duplicated (with drift risk) in
-`SPHEREx-L4-Cosmology-Pipeline/systematics/lognormal_mocks/generate_config.py`
-(`BIN_SUITE_v28`), `myscripts/lognormal_mocks_diagnostics/pk_bin_patches.py`
-(`BIN_INFO`) and `myscripts/project_lognormal_transfer_cl.py` (`V28_*`); milestone
-M2 points those at this module.
+A run is a list of `Bin`s (`config.RunConfig`); this module holds the default list:
+the seven-bin design of the SPHEREx v28 forecast (z = 0-2.2 partitioned into shells,
+one periodic box per shell centred on the observer), with the seed schedule and the
+radial buffer that went with it. Any other table with the same fields can be given in
+a run config instead.
 
 Provenance of the numbers (all copied verbatim from `generate_config.py`,
 2026-09-04):
@@ -57,6 +56,19 @@ class Bin:
     nbar: float  # (Mpc/h)^-3, v28 nominal
     b: float
     f: float  # growth rate as used by prod_v2 (see module docstring)
+    pk_file: str = ""  # input P(k) TSV name (relative to the run's pk_dir)
+
+    def __post_init__(self):
+        if not self.pk_file:
+            object.__setattr__(
+                self, "pk_file", f"matterpower_camb_zeff={self.z_eff:g}.tsv"
+            )
+        if not (0 < self.index < 128):
+            raise ValueError(f"bin index must be in 1..127 (int8), got {self.index}")
+        if not (0.0 <= self.rmin < self.rmax):
+            raise ValueError(f"need 0 <= rmin < rmax for {self.name}")
+        if self.N_grid < 2 or self.N_grid % 2:
+            raise ValueError(f"N_grid must be even and >= 2 for {self.name}")
 
     @property
     def cell(self) -> float:
@@ -72,8 +84,8 @@ class Bin:
 
     @property
     def matterpower_file(self) -> str:
-        """Relative path convention of the CAMB linear P(k) TSV for this bin."""
-        return f"data/matterpower_camb_zeff={self.z_eff:g}.tsv"
+        """`data/<pk_file>`: where the M1 scripts expect the TSV in a checkout."""
+        return f"data/{self.pk_file}"
 
 
 # Growth rates as written into the prod_v2 configs (astropy Planck18 Om(z)**0.55; see

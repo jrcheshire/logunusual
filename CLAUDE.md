@@ -7,30 +7,28 @@ conventions that are easy to get wrong, and where the project stands.
 
 ## What this is
 
-`logunusual` is a **fast lognormal galaxy mock generator: JAX for the field stage (CPU or
-CUDA), numpy for per-cell Poisson sampling and placement, streamed parquet output.** Its
-first job is to be a drop-in producer of the SPHEREx per-bin lognormal mock suite
-(`prod_v2`: 7 shells partitioning z = 0-2.2, observer at the origin, RSD applied, 100
-realizations) at a fraction of the wall time and memory of the Julia path, with an input
-P(k) interface that can later take a nonlinear spectrum and f_NL scale-dependent bias.
+`logunusual` is a **lognormal galaxy mock generator: JAX for the field stage (CPU or
+CUDA), numpy for per-cell Poisson sampling and placement, streamed parquet output.**
+A run is a list of bins, each a periodic box centred on the observer holding one
+radial shell; galaxies are drawn in the buffered shell, displaced radially by their
+cell's velocity, cut to the shell and an optional angular HEALPix mask, and streamed
+to one parquet per realization. The input P(k) interface is a plain TSV per bin, so
+a nonlinear spectrum or an f_NL scale-dependent bias is a different table (M4).
 
-Siblings and their roles:
-- `~/spherex/LogNormalGalaxies` + `~/spherex/LogNormalSimulations` (Julia, Wide-Angle-Team,
-  Henry's): the **reference implementation** and parity target. Read the code, not the
-  docstrings: `LogNormalGalaxies.jl` (`generate_field`, `draw_galaxies_with_velocities`,
-  `pixel_window!`), `pk_to_pkG.jl`, `LogNormalSimulations/src/Run_Sims.jl` (per-option
-  stage order), `catalog_generation.jl` (`apply_rsd!`, `select_galaxies`),
-  `winlib.jl` (`calc_win`).
-- `~/spherex/disco-mocks` (`discomocks/catalog.py`, `icfield.py`, `xcheck.py`): the
-  **sampling / parquet / validation layer is copied from here** (small, numpy, stable),
-  not path-depended on -- a path dep would drag DISCO-DJ and its env.
-- `~/spherex/SPHEREx-L4-Cosmology-Pipeline` (`chimera`): the **consumers**.
-  `systematics/lognormal_mocks/{run_bin_suite.py, generate_config.py, read_outputs.py,
-  contaminate_catalog.py}` and `systematics/null_test/run_field_level.py` define the
-  contract below. `myscripts/lognormal_mocks_diagnostics/pk_bin_patches.py` and
-  `diagnose_realization.py` are the shell-level validation instruments.
+The **default inputs** are a survey forecast: the seven-bin v28 table in `suite.py`
+(shells partitioning z = 0-2.2, densities, biases, growth rates) and, when given, a
+survey mask. Nothing else in the code knows about a survey; any bin table with the
+same fields can be given in a run config. No other repository is a dependency, a
+consumer named in the code, or a gate.
 
-Remote: `github.com/jrcheshire/logunusual` (pushed 2026-09-04).
+Reference material (conventions only; no gate compares to either):
+- `~/spherex/LogNormalGalaxies` + `~/spherex/LogNormalSimulations` (Julia, Henry's):
+  the construction this package was measured against (see Construction).
+- `~/spherex/disco-mocks` (`discomocks/catalog.py`, `xcheck.py`): the streamed
+  sampling / parquet / CIC-estimator patterns were copied from here (small, numpy,
+  stable), not path-depended on.
+
+Remote: `github.com/jrcheshire/logunusual`.
 
 ## Build / test / run
 
@@ -64,33 +62,41 @@ pixi run lint                # flake8, max-line 88, ignore E203
 
 ## Code layout (`logunusual/`)
 
-- `suite.py` **[M0]** -- `BIN_SUITE_V28` (7 frozen `Bin`s), `seed_for`, the seed base
-  and stride, `RADIAL_BUFFER`, mask constants, distance cosmology. **The one source of
-  the bin table**; chimera/myscripts carry three drifting copies until M2.
-- `grid.py` **[M1]** -- `Box`, k-grids (rfft on z, the plane-parallel line of sight),
-  Hermitian weights, the separable `sinc` windows, the CIC shot-noise alias factor
-  (Jing 2005).
+- `suite.py` **[M0]** -- the default bin table `BIN_SUITE_V28` (frozen `Bin`s, now
+  with a `pk_file` name), `seed_for`, the seed base and stride, `RADIAL_BUFFER`, mask
+  constants, distance cosmology. Dependency-free.
+- `grid.py` **[M1]** -- `Box`, k-grids (rfft on z), Hermitian weights, the separable
+  `sinc` windows, the CIC shot-noise alias factor (Jing 2005).
 - `pk.py` **[M1]** -- TSV loader + `PowerSpectrum` (log-log cubic spline, power-law
-  tails), and the **grid-native** `grid_pkG`: `P -> xi -> log1p -> P_G` done with two
-  FFTs on the simulation grid (see Construction). Reports `xi_min`, `sigma2`, and the
-  clipped negative-`P_G` fraction; raises if `xi <= -1` (no lognormal exists).
-- `field.py` **[M1]** -- JAX (eager, x64): white noise (numpy PCG64) -> Gaussian ->
-  lognormal galaxy and matter fields -> z displacement. `generate_fields` is the entry
+  tails, `file_hash`), and the **grid-native** `grid_pkG`: `P -> xi -> log1p -> P_G`
+  with two FFTs on the simulation grid. Reports `xi_min`, `sigma2`, the clipped
+  negative-`P_G` fraction; raises if `xi <= -1`.
+- `field.py` **[M1, M2]** -- JAX (eager, x64): white noise (numpy PCG64) -> Gaussian ->
+  lognormal galaxy and matter fields -> displacement components (`psi_axes`, any
+  subset of "xyz"; `Fields.psi` dict, `psi_flat`). `generate_fields` is the entry
   point; `trace=` hook for memory instrumentation.
 - `sample.py` **[M1]** -- numpy: intensity, Poisson counts, streamed uniform-in-cell
   placement (chunking is bit-invariant), own-cell plane-parallel RSD, `split_seed`.
+- `shell.py` **[M2]** -- `Shell` (rmin, rmax, buffer; `check_box`), observer-centred
+  `cell_window`, `AngularMask` (HEALPix h5, NESTED or RING, any NSIDE), `select`,
+  `rsd_radial`, and the streamed `sample_shell` generator with `ShellStats`.
+- `io.py` **[M2]** -- the catalog format: `CatalogWriter` (pinned row groups, bins
+  ascending, atomic rename), `read_metadata`, `bin_metadata`, `check_layout`,
+  `read_bin`.
+- `config.py` **[M2]** -- `RunConfig` (YAML <-> dataclass; bins default to the suite;
+  `nbar_scale`/`grid_scale` for smoke runs; `config_hash` over the mock definition,
+  not paths), `default_config`.
+- `run.py` **[M2]** -- `generate_realization`: bins in order, field stage -> streamed
+  shell draw -> writer; per-bin metadata and `summary.json`; `plan_realization`.
+- `cli.py` **[M2]** -- `logunusual run | check | default-config` (console script).
 - `validate.py` **[M1]** -- CIC painter, deconvolution, Jing shot noise, multipoles
   (Hermitian-weighted, `n_indep` for SEs), `gaussian_se`, Kaiser boosts, and the
   **coherent-alias estimator response** (`effective_window`, `estimator_response`).
-- `gates.py` **[M1]** -- the statistical gates as functions (used by the slow tests
-  and `scripts/m1_gates.py`); per-realization ratios, scatter SEs, derived bands.
-- `shell.py` [M2] -- buffered shell + HEALPix mask window at cell level, observer at
-  origin, radial RSD (needs all three displacement components).
-- `io.py` [M2] -- streamed parquet writer with pinned row groups + provenance metadata.
-- `cli.py` [M2] -- `logunusual run --config ... --realizations a:b`.
-- `scripts/` -- `m1_gates.py` (full gate tables -> `runs/m1_gates/*.json`),
-  `m1_reproducibility.py` (two processes, byte compare), `m1_memory.py` (live JAX
-  bytes, polled).
+- `gates.py` **[M1, M2]** -- the statistical gates as functions (slow tests and
+  `scripts/m{1,2}_gates.py`); per-realization ratios, scatter SEs, derived bands;
+  `gate_shell_density` (M2).
+- `scripts/` -- `m1_gates.py`, `m1_reproducibility.py`, `m1_memory.py`,
+  `m2_gates.py`. `configs/v28_default.yaml` is the worked run config.
 
 ## Construction (M1, decided 2026-09-04 from measurements; first principles, not a
 ## port of the Julia code)
@@ -133,44 +139,62 @@ assignment (not the 3x3x3 stencil) keeps the RSD prediction window-free.
 
 **Estimator response (validate.py).** A catalog drawn from a grid field is
 lattice-periodic, so on a finite estimator mesh the alias images carry the SAME
-Fourier coefficient and add coherently: `P_mesh = |sum_n W_cic(k_n) T(k_n)|^2 P_grid`
-(separable). The standard incoherent alias sum applies to the shot noise only (Jing
-2005). On a 2x mesh the deconvolved power is biased low by 0.3% at half the generator
-Nyquist and 3.5% at the Nyquist; `estimator_response` is the exact correction and
-every catalog gate uses it. A consumer measuring these mocks on a mesh comparable to
-the generator's sees the same effect.
+Fourier coefficient up to a sign and add coherently:
+`P_mesh = |sum_n s_n W_cic(k_n) T(k_n)|^2 P_grid` (separable), with `s_n = (-1)^(r n)`
+per axis from the half-cell offset of the cell centres (`r` = mesh ratio). The
+standard incoherent alias sum applies to the shot noise only (Jing 2005). On a 2x
+mesh every sign is + and the deconvolved power is biased low by 0.3% at half the
+generator Nyquist and 3.5% at the Nyquist. On the generator's OWN mesh the dominant
+image subtracts: the deconvolved power reads 6% low at half the Nyquist (shell
+average; 11% along an axis), measured by G11 (2026-09-04; the sign was missing in M1's
+formula, which the 2x gates could not see). `estimator_response` is the exact
+correction and every catalog gate uses it.
 
-## Product contract (M2 target; the layout is the interface)
+**Shell product (M2).** Each bin is its own periodic box centred on the observer
+(positions shifted by `-L/2`; cell centres at `(i + 0.5) dx - L/2`). The intensity is
+multiplied at cell level by the full-sky window `r_lo <= |x_centre| <= r_hi` with
+`r_lo = max(0, rmin - buffer)`, `r_hi = rmax + buffer`; the lognormal field itself is
+periodic and unwindowed, so the grid identity (G3) is untouched. Each galaxy is
+displaced radially by its own cell's displacement, `s = x + f (Psi . x / r^2) x`, then
+kept iff `rmin <= |s| <= rmax` (inclusive) and, with a mask, the HEALPix pixel of `s`
+is set (`hp.vec2pix`). No periodic wrap after the shift (a galaxy can only leave the box
+from a buffer cell touching a face and is outside the shell either way; the count is
+reported). The buffer must exceed a cell diagonal and `rmax + buffer <= L/2`
+(`Shell.check_box`). Consequences: `N_kept ~ Poisson(nbar fsky V_shell)` exactly for a
+uniform field (the fast gate), and the radial profile is flat through both edges
+because galaxies cross them in both directions (G10).
 
-Copied from the chimera readers, 2026-09-04. Cross-check against
-`run_bin_suite.py:172-188` and `pk_bin_patches.py:114-186` before changing anything.
+## Catalog format (the package's own spec; `io.py`)
 
-- Path: `<out>/<run_name>/realization_{i:05d}/catalog.parq`.
-- Columns: `x, y, z: double` (comoving Mpc/h, distance cosmology H0 = 67.36,
-  Om0 = 0.3153), `bin: int8` = 1..7 (`Bin.index`). Nothing else: no velocities, no
-  redshift, no randoms.
-- Frame: **observer at the origin**; each bin is its own box but all share the origin,
-  so the file is one nested-shell cloud. **RSD already applied** (radial).
-- Ordering: rows **bin-contiguous, bins ascending**; row groups **2^20 rows**,
-  byte-contiguous per bin (`pk_bin_patches.py` hard-exits otherwise; pyarrow's default
-  gives 2^20 implicitly today -- pin it explicitly). The same reader selects row groups
-  by the `bin` column's min/max **statistics**, so statistics must be written, and it
-  takes the slab start from column 0, so `x` stays the first column.
-- Seeds: `SEED_BASE + realization * 1000 + bin_index`, base 137_000_000.
-- Mask: HEALPix NSIDE 128 NESTED int8 dataset `MASK` (h5), fsky 0.7127; galaxies are
-  kept where the mask is 1 and `rmin <= r <= rmax`. Shells are constant-phi_r
-  (`radial_selection form=1`); the drawn region is the shell padded by 150 Mpc/h.
-- Density: the **nominal v28 nbar** (`Bin.nbar`). prod_v2 is 1.24-1.28x over-dense and
-  `contaminate_catalog.py --nbar-overdensity-factor` defaults to 1.28 because of it;
-  M2 makes that metadata-driven. Do not reproduce the over-density.
-- Metadata (file-level, string-valued, disco-mocks style): `box_size_x/y/z` per bin,
-  `generator = logunusual`, package version, host, config hash, input P(k) file hash per
-  bin, `nbar_target` and `realized_nbar` per bin, `ic_seed`/`draw_seed` per bin.
+- Path: `<output_dir>/<run_name>/realization_{i:05d}/catalog.parq` (+ `summary.json`).
+- Columns, in this order: `x, y, z: float64` (comoving Mpc/h, observer at the origin,
+  redshift space), `bin: int8` (the bin's `index`, always written). Nothing else: no
+  velocities, no redshift, no randoms.
+- Rows bin-contiguous, bins ascending; row groups of exactly `row_group_rows`
+  (default 2^20) except each bin's last, so a row group never mixes bins; column
+  statistics written; consecutive row groups byte-contiguous (one bin = one byte
+  range). `io.check_layout` verifies all of this without reading the data; the CLI
+  `check` runs it.
+- Seeds: `seed_base + realization * 1000 + bin.index` -> `split_seed` -> (ic, draw).
+- Density: each bin targets its configured `nbar` (times `nbar_scale`); there is no
+  clip, so the file stamps `nbar_overdensity_factor = 1.0`.
+- Metadata (file-level, string-valued): global keys (`generator`, `generator_version`,
+  `created`, `host`, `machine`, `jax_backend`, `config_hash`, `seed_base`, scales,
+  `radial_buffer`, `jitter_p`, `rsd`, mask name/sha256/nside/ordering/fsky or
+  `mask = none`, `bins`) and per-bin keys `bin{index:02d}.*` (shell, box, grid, `b`,
+  `f`, `nbar_target`, `realized_nbar` = `n_kept / (fsky V_shell)`, `n_galaxies`,
+  `n_drawn`, `n_left_box`, seeds, `pk_file`, `pk_sha256`, `sigma2_*`, `xi_min_galaxy`,
+  `clipped_power_fraction`, `psi_rms`, timings, peak live JAX bytes).
+- Written as `catalog.parq.tmp` and renamed on close: a file with the final name is
+  complete.
 
 ## Conventions & gotchas
 
-- Units: lengths Mpc/h, k in h/Mpc, P(k) in (Mpc/h)^3. Cell centres at
-  `(i + 0.5) * dx`; positions in `[0, L)`.
+- Units: lengths Mpc/h, k in h/Mpc, P(k) in (Mpc/h)^3. Periodic-box code (M1) has
+  cell centres at `(i + 0.5) * dx` and positions in `[0, L)`; the shell product shifts
+  both by `-L/2` (observer at the origin). Shell edges are inclusive at both ends.
+- Mask lookups use `hp.vec2pix(nside, x, y, z, nest=...)` on the redshift-space
+  position; the ordering comes from the file's `ORDERING` attribute.
 - `np.sinc(x) = sin(pi x)/(pi x)`; the windows take cycles per cell `f = k dx / 2 pi`.
 - Standard errors: a shell's INDEPENDENT mode count is the rfft half-grid count
   (`n_indep`), not the Hermitian-weighted full-grid count (`nmodes`); using the latter
@@ -199,8 +223,11 @@ Copied from the chimera readers, 2026-09-04. Cross-check against
 - Memory: JAX arrays are invisible to tracemalloc and `memory_stats()` is None on CPU;
   `scripts/m1_memory.py` polls `jax.live_arrays()` (misses XLA scratch, says so).
 - Where the time went in the Julia reference (bin 5, 512^3, laptop): field 8 s, draw
-  104 s single-threaded, constraint randoms 64 s, estimator 35 s; peak 75 GB. Here at
-  128^3: fields 0.7 s, 3e6-galaxy catalog 0.13 s (M3 measures 512^3).
+  104 s single-threaded, constraint randoms 64 s, estimator 35 s; peak 75 GB. Here
+  (2026-09-04, laptop CPU, full-density seven-bin realization): 187 s wall for all
+  seven bins, 19.3 GB host RSS, 7.0 x N^3 float64 live JAX bytes per bin; bin 5 is
+  8 s field + 31 s sample. The sample stage is 80% of the wall (M3's target), and the
+  full-sky buffered window draws 2.4x the kept galaxies.
 
 ## Working rules (project)
 
@@ -222,14 +249,18 @@ Copied from the chimera readers, 2026-09-04. Cross-check against
 ## Status & next step
 
 - **M0 bootstrap DONE (2026-09-04).**
-- **M1 periodic-box core DONE (2026-09-04)** on branch `jc/m1-periodic-box`: modules
-  above, 44 fast tests + 5 slow gates, CI workflow, three scripts. Gate results and the
-  two gate re-derivations (estimator response; Kaiser as a linear-limit arm) are in
-  `ROADMAP.md` M1. The Julia code was read in full and used for conventions only; no
-  gate compares to it (JC's direction, 2026-09-04).
-- **Next: M2 shell product** (shell + mask window, radial RSD with all three
-  displacement components, streamed parquet, 7-bin driver, cli). Open a fresh plan-mode
-  session against `ROADMAP.md` M2.
-- Open, not blocking: the 1.28x closure arm (now with a measured mechanism: the
-  post-transform deconvolution's clipped mass; see Construction) and whether to report
-  it to Henry -- JC's call.
+- **M1 periodic-box core DONE (2026-09-04, merged):** grid-native P_G, uniform
+  placement with the target deconvolved before the transform, own-cell velocities,
+  gates G1-G9 in `ROADMAP.md`. The Julia code was read in full and used for
+  conventions only; no gate compares to it.
+- **M2 shell product DONE (2026-09-04)** on branch `jc/m2-shell-product`: three
+  displacement components, `shell.py`, `io.py`, `config.py`, `run.py`, `cli.py`,
+  `configs/v28_default.yaml`; fast tests + slow gates G10/G11 (`ROADMAP.md` M2).
+  Direction recorded 2026-09-04: this is a lognormal mock code, not a survey code; the
+  v28 table and a mask are default inputs; no other repository is touched or used as
+  a gate.
+- **Next: M3 performance and memory** (512^3 bins on the laptop, CUDA on deneb, ULP
+  record, jit with bitwise-before-jit). Open a fresh plan-mode session against
+  `ROADMAP.md` M3.
+- Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
+  clipped mass; see Construction) and whether to report it -- JC's call.
