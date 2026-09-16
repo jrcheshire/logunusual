@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.10
+        with:
+          pixi-version: latest
+          locked: true
+          cache: true
+      - name: setup (CPU JAX + editable install)
+        run: pixi run setup
+      - name: format
+        run: pixi run check-format
+      - name: lint
+        run: pixi run lint
+      - name: test (full suite, slow gates included)
+        run: pixi run test

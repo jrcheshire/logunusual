@@ -1,0 +1,254 @@
+"""Periodic-box P(k) estimator and the analytic references the gates use (numpy).
+
+- `cic_paint`: cloud-in-cell mass assignment with periodic wrap (disco-mocks
+  `xcheck.py`). `delta_k_from_positions` paints, forms the contrast, `rfftn`s and
+  (optionally) divides by the CIC amplitude window `sinc^2` per axis.
+- Shot noise for a CIC-painted Poisson process: Jing (2005) `1/nbar prod_i
+  [1 - 2/3 sin^2(k_i dx/2)]` before deconvolution (`grid.cic_shot_noise_factor`).
+- `power_multipoles`: `P = V/N^6 |delta_k|^2`, even Legendre multipoles about the
+  z axis, rfft half-grid weighted by its Hermitian multiplicity, shells of width
+  `k_f` starting at `k_f / 2` (DC excluded). Port of disco-mocks `rsd.py` to numpy.
+- Kaiser: `P_ell / P` boosts for `beta = f / b`.
+
+Aliasing is controlled by the caller's choice of estimator mesh: measuring a generator
+of mesh N on a mesh 2N keeps the generator's first zone clean of the estimator's own
+aliasing (< 0.1% at the generator Nyquist for a CDM slope; no interlacing needed).
+"""
+
+import numpy as np
+
+from .grid import (
+    Box,
+    cic_shot_noise_factor,
+    frequencies,
+    hermitian_weights,
+    k_grid,
+    sinc_window,
+)
+
+
+def cic_paint(xyz, box: Box):
+    """CIC weights on the mesh (sum = number of particles); positions may be anywhere,
+    they are wrapped periodically."""
+    pos = np.asarray(xyz, dtype=np.float64)
+    n = box.n_mesh
+    g = pos / box.dx
+    i0 = np.floor(g).astype(np.int64)
+    frac = g - i0
+    rho = np.zeros(n * n * n, dtype=np.float64)
+    for dxi in (0, 1):
+        wx = frac[:, 0] if dxi else 1.0 - frac[:, 0]
+        ix = (i0[:, 0] + dxi) % n
+        for dyi in (0, 1):
+            wy = frac[:, 1] if dyi else 1.0 - frac[:, 1]
+            iy = (i0[:, 1] + dyi) % n
+            for dzi in (0, 1):
+                wz = frac[:, 2] if dzi else 1.0 - frac[:, 2]
+                iz = (i0[:, 2] + dzi) % n
+                flat = (ix * n + iy) * n + iz
+                rho += np.bincount(flat, weights=wx * wy * wz, minlength=n * n * n)
+    return rho.reshape(n, n, n)
+
+
+def delta_k_from_positions(xyz, box: Box, *, deconvolve=True):
+    """`rfftn(rho / mean - 1)`, divided by the CIC window `sinc^2` per axis if asked."""
+    rho = cic_paint(xyz, box)
+    delta = rho / rho.mean() - 1.0
+    dk = np.fft.rfftn(delta)
+    if deconvolve:
+        dk = dk / sinc_window(box, 2.0)
+    return dk
+
+
+def effective_window(box: Box, box_est: Box, jitter_p: int, n_alias: int = 64):
+    """Per-mode factor relating the CIC-painted (UNdeconvolved) mesh power of a catalog
+    drawn from a grid field to the grid power `P_grid(k mod 2pi/dx)`:
+
+        P_mesh(k) = |sum_n W_cic(k_n) T(k_n)|^2 P_grid(k),   k_n = k + 2 pi n / H,
+
+    with `H` the estimator spacing, `W_cic = prod sinc^2`, `T = prod sinc^p` the jitter
+    window in generator-cell units. The alias images carry the SAME grid Fourier
+    coefficient up to a sign (the catalog is lattice-periodic with cell centres at
+    half-integer multiples of `dx`, so shifting `k` by `2 pi m / dx` multiplies the
+    grid coefficient by `(-1)^m`; image `n` of the estimator mesh is `m = r n` per
+    axis with `r = dx / H` the mesh ratio), so they add coherently with that sign; the
+    standard incoherent alias sum (Jing 2005) applies to the shot noise only. For an
+    even mesh ratio every sign is +; on the generator's own mesh (`r = 1`) the dominant
+    image (`n = -1`) SUBTRACTS (measured 2026-09-04: 6% at half the Nyquist, G11).
+    Separable, so the 3-d sum is a product of 1-d sums truncated at |n| <= n_alias
+    (terms fall as n^-(2+p)). Requires an integer mesh ratio."""
+    r = box_est.n_mesh / box.n_mesh
+    if abs(r - round(r)) > 1e-12:
+        raise ValueError(
+            "estimator mesh must be an integer multiple of the generator's"
+        )
+    r = int(round(r))
+    f, fz = frequencies(box_est)
+
+    def axis(fe):
+        acc = np.zeros_like(fe)
+        for n in range(-n_alias, n_alias + 1):
+            x = fe + n
+            sign = -1.0 if (r * n) % 2 else 1.0
+            acc += sign * np.sinc(x) ** 2 * np.sinc(r * x) ** jitter_p
+        return acc**2
+
+    ax, az = axis(f), axis(fz)
+    return ax[:, None, None] * ax[None, :, None] * az[None, None, :]
+
+
+def estimator_response(box: Box, box_est: Box, jitter_p: int):
+    """`effective_window / (W_cic^2 T^2)`: the ratio of the deconvolved mesh power to
+    the catalog's true continuum power `T^2 P_grid` in the first zone. NaN where the
+    jitter window vanishes (only at the generator's 2x Nyquist and beyond)."""
+    f, fz = frequencies(box_est)
+    r = box_est.n_mesh / box.n_mesh
+    T2 = (
+        (np.sinc(r * f) ** (2 * jitter_p))[:, None, None]
+        * (np.sinc(r * f) ** (2 * jitter_p))[None, :, None]
+        * (np.sinc(r * fz) ** (2 * jitter_p))[None, None, :]
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return effective_window(box, box_est, jitter_p) / (
+            sinc_window(box_est, 4.0) * T2
+        )
+
+
+def shot_noise_k(box: Box, nbar: float, *, deconvolved=True):
+    """Expected shot power per rfft mode of a CIC-painted Poisson process of density
+    `nbar` (Jing 2005 eq. 20), divided by the CIC power window when `deconvolved`."""
+    s = cic_shot_noise_factor(box) / float(nbar)
+    if deconvolved:
+        s = s / sinc_window(box, 4.0)
+    return s
+
+
+def shell_edges(box: Box):
+    """Edges `k_f/2, 3k_f/2, ...` up to the Nyquist; centres are multiples of k_f."""
+    return np.arange(0.5 * box.k_f, box.k_nyq + box.k_f, box.k_f)
+
+
+_LEGENDRE = {
+    0: lambda mu: np.ones_like(mu),
+    2: lambda mu: 0.5 * (3.0 * mu**2 - 1.0),
+    4: lambda mu: 0.125 * (35.0 * mu**4 - 30.0 * mu**2 + 3.0),
+}
+
+
+def _shell_index(box: Box):
+    _, _, k_mag = k_grid(box)
+    edges = shell_edges(box)
+    idx = np.digitize(k_mag.ravel(), edges) - 1
+    nb = edges.size - 1
+    valid = (idx >= 0) & (idx < nb)
+    return k_mag, np.where(valid, idx, nb), nb
+
+
+def power_multipoles(delta_k, box: Box, *, ells=(0, 2, 4), shot_k=None, delta_k_b=None):
+    """Returns dict with `k` (shell centres), `nmodes` (full-grid mode counts), and
+    `P{ell}` in (Mpc/h)^3. `shot_k` (per-mode array or scalar) is subtracted from the
+    per-mode power before the Legendre weighting. With `delta_k_b` the cross power
+    `Re(a b*)` is used instead of `|a|^2`."""
+    n = box.n_mesh
+    norm = box.volume / n**6
+    if delta_k_b is None:
+        P = (np.abs(delta_k) ** 2) * norm
+    else:
+        P = np.real(delta_k * np.conj(delta_k_b)) * norm
+    if shot_k is not None:
+        P = P - shot_k
+    k_mag, idx, nb = _shell_index(box)
+    herm = np.broadcast_to(hermitian_weights(box), k_mag.shape).ravel()
+    _, kz_1d, _ = k_grid(box)
+    kz = np.broadcast_to(kz_1d[None, None, :], k_mag.shape)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mu = np.where(k_mag > 0, kz / k_mag, 0.0).ravel()
+    P = P.ravel()
+    wsum = np.bincount(idx, weights=herm, minlength=nb + 1)[:nb]
+    n_indep = np.bincount(idx, minlength=nb + 1)[:nb]
+    out = {
+        "k": 0.5 * (shell_edges(box)[1:] + shell_edges(box)[:-1]),
+        "nmodes": wsum,  # full-grid count (the weight of the shell)
+        "n_indep": n_indep,  # half-grid count: the number of INDEPENDENT modes
+    }
+    for ell in ells:
+        contrib = P * _LEGENDRE[ell](mu) * herm
+        sums = np.bincount(idx, weights=contrib, minlength=nb + 1)[:nb]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out[f"P{ell}"] = (2 * ell + 1) * sums / wsum
+    return out
+
+
+def field_power(delta, box: Box, **kw):
+    """Multipoles of a real-space grid field."""
+    return power_multipoles(
+        np.fft.rfftn(np.asarray(delta, dtype=np.float64)), box, **kw
+    )
+
+
+def shell_average(values_k, box: Box):
+    """Hermitian-weighted shell average of any per-mode quantity (e.g. a target P)."""
+    k_mag, idx, nb = _shell_index(box)
+    herm = np.broadcast_to(hermitian_weights(box), k_mag.shape).ravel()
+    wsum = np.bincount(idx, weights=herm, minlength=nb + 1)[:nb]
+    sums = np.bincount(
+        idx, weights=np.asarray(values_k).ravel() * herm, minlength=nb + 1
+    )[:nb]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return sums / wsum
+
+
+def gaussian_se(pk_grid, box: Box):
+    """Standard error of the shell-mean power of ONE Gaussian realization with per-mode
+    expectation `pk_grid`: each independent (half-grid) mode's |delta_k|^2 has variance
+    P^2, so `SE = sqrt(sum P_i^2) / n_indep` over the half-grid modes of the shell. The
+    Hermitian-weighted mean has the same variance (weights cancel; conjugates are
+    identical, not independent)."""
+    k_mag, idx, nb = _shell_index(box)
+    P2 = (np.asarray(pk_grid, dtype=np.float64) ** 2).ravel()
+    n_indep = np.bincount(idx, minlength=nb + 1)[:nb]
+    s2 = np.bincount(idx, weights=P2, minlength=nb + 1)[:nb]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.sqrt(s2) / n_indep
+
+
+def kaiser_boost(ell: int, beta: float) -> float:
+    """`P_ell / P_real` in linear theory for `beta = f/b`."""
+    if ell == 0:
+        return 1.0 + 2.0 * beta / 3.0 + beta**2 / 5.0
+    if ell == 2:
+        return 4.0 * beta / 3.0 + 4.0 * beta**2 / 7.0
+    if ell == 4:
+        return 8.0 * beta**2 / 35.0
+    raise ValueError(ell)
+
+
+def kaiser_ratio(beta: float) -> float:
+    """`P_2 / P_0` in linear theory."""
+    return kaiser_boost(2, beta) / kaiser_boost(0, beta)
+
+
+def rebin(k, values, weights, edges):
+    """Weight-averaged rebinning of shell values into `edges`; returns
+    `(k_centre_weighted, value, weight_sum)` with empty bins dropped."""
+    k = np.asarray(k)
+    values = np.asarray(values)
+    weights = np.asarray(weights, dtype=np.float64)
+    idx = np.digitize(k, edges) - 1
+    ok = (idx >= 0) & (idx < len(edges) - 1) & np.isfinite(values)
+    nb = len(edges) - 1
+    w = np.bincount(idx[ok], weights=weights[ok], minlength=nb)
+    kk = np.bincount(idx[ok], weights=(weights * k)[ok], minlength=nb)
+    vv = np.bincount(idx[ok], weights=(weights * values)[ok], minlength=nb)
+    keep = w > 0
+    return kk[keep] / w[keep], vv[keep] / w[keep], w[keep]
+
+
+def gate_bands(box: Box, k_max: float, *, dex=0.1, k_switch=0.05):
+    """Edges for the gate bands: kf-shells above `k_switch`, 0.1-dex log bins below it
+    (few modes per shell at low k), all below `k_max`."""
+    lo = np.arange(np.log10(0.5 * box.k_f), np.log10(k_switch), dex)
+    lo = 10.0**lo
+    hi = shell_edges(box)
+    hi = hi[(hi >= k_switch) & (hi <= k_max)]
+    return np.concatenate([lo, hi])

@@ -1,0 +1,19 @@
+# logunusual run config: the seven-bin v28 default. Paths are placeholders; `bins`
+# is omitted, so the table in `logunusual/suite.py` is used (print it with
+# `logunusual default-config`). Any other table can be given as `bins:` with the same
+# fields (name, index, z_min, z_max, z_eff, rmin, rmax, L_box, N_grid, nbar, b, f,
+# pk_file).
+run_name: v28
+output_dir: runs            # <output_dir>/<run_name>/realization_NNNNN/catalog.parq
+pk_dir: data                # holds one P(k) TSV per bin, named by the bin's pk_file
+mask:                       # omit (or null) for the full sky
+  path: data/mask.h5        # HEALPix 0/1 map, root attrs PIXTYPE=HEALPIX, ORDERING
+  dataset: MASK
+seed_base: 137000000        # seed = seed_base + realization * 1000 + bin index
+nbar_scale: 1.0             # multiplies every bin's nbar (smoke runs)
+grid_scale: 1.0             # multiplies every bin's N_grid (smoke runs)
+radial_buffer: 150.0        # Mpc/h drawn beyond the shell on both sides
+jitter_p: 1                 # uniform-in-cell placement (the validated construction)
+chunk_cells: null           # streaming slab size in cells (default: one x-slab)
+row_group_rows: 1048576     # parquet row-group pin (2^20)
+n_radial_bins: 8            # sub-shells of the density-profile diagnostic
