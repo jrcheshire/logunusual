@@ -65,7 +65,7 @@ from logunusual.grid import Box, k_components
 from logunusual.pk import PowerSpectrum, grid_pkG
 
 n, L, pk_file, dtype = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3], sys.argv[4]
-B, name = float(sys.argv[5]), sys.argv[6]
+B, name, leg = float(sys.argv[5]), sys.argv[6], sys.argv[7]
 spectrum = PowerSpectrum.from_tsv(pk_file)
 
 
@@ -94,9 +94,15 @@ def probe_field_arrays(n, L, real_dt, cplx_dt):
     out = []
     for target_b in (B, 1.0):
         P = field.target_on_grid(lambda k: target_b * target_b * spectrum(k), box, 1)
-        pkG, _ = grid_pkG(P, box, jnp)
-        pkG = jnp.asarray(pkG, dtype=real_dt)
-        amp = jnp.sqrt(pkG / box.v_cell)
+        # Cast BEFORE grid_pkG, not after: grid_pkG is dtype-agnostic and its two
+        # full-grid FFTs dominate the peak, so casting afterwards left this leg in
+        # float64 and the probe OOMed in its f64 section (job 1956, 2026-09-15).
+        # The cast is passed as a TEMPORARY -- binding it to a name keeps a second
+        # full-grid device array alive through grid_pkG and inflates the peak 7.7%,
+        # which the f64 self-check catches as a mismatch.
+        pkG, _ = grid_pkG(jnp.asarray(P, dtype=real_dt), box, jnp)
+        del P
+        amp = jnp.sqrt(jnp.asarray(pkG, dtype=real_dt) / box.v_cell)
         del pkG
         G = jnp.fft.irfftn(white_k * amp, s=box.shape, axes=(0, 1, 2)).astype(real_dt)
         del amp
@@ -110,8 +116,13 @@ def probe_field_arrays(n, L, real_dt, cplx_dt):
     k2 = comps[0] ** 2 + comps[1] ** 2 + comps[2] ** 2
     k2 = k2.at[0, 0, 0].set(1.0)
     psi = []
+    # `1j` is a Python complex, and with x64 enabled `1j * x` promotes a float32
+    # array to complex128 -- the cast afterwards is too late, the wide temporary
+    # has already been allocated. The imaginary unit is therefore materialised at
+    # the working dtype. Any real float32 field stage has to do the same.
+    imag_unit = jnp.asarray(1j, dtype=cplx_dt)
     for ax in range(3):
-        psi_k = (1j * comps[ax] / k2 * delta_m_k).astype(cplx_dt)
+        psi_k = (comps[ax] / k2).astype(cplx_dt) * imag_unit * delta_m_k
         psi_k = psi_k.at[0, 0, 0].set(0.0)
         psi.append(
             jnp.fft.irfftn(psi_k, s=box.shape, axes=(0, 1, 2)).astype(real_dt)
@@ -158,49 +169,34 @@ try:
             th.join()
         return pk
 
-    if dtype == "f64":
+    # One leg per process. `peak_bytes_in_use` is a process-wide high-water mark
+    # with no reset, so two legs in one process can only ever give a one-sided
+    # bound; the parent runs the probe's f64 self-check as its own child and
+    # compares two independent exact peaks.
+    if leg == "real" or (leg == "full" and dtype == "f64"):
 
-        def leg(pk):
+        def body(pk):
             F = field.generate_fields(
-                spectrum, B, Box(n, L), 1, keep_matter=True, psi_axes="xyz", trace=pk.cb
-            )
-            return [F.delta_g, F.delta_m] + list(F.psi.values())
-
-        p = measure(leg, "field_stage")
-    else:
-        # The probe earns its f32 number by reproducing the REAL stage's f64
-        # footprint at a small N first. `memory_stats()` is None on CPU, so the
-        # comparison uses the live-array instrument, which both backends have.
-        nv = min(n, 128)
-
-        def real_leg(pk):
-            F = field.generate_fields(
-                spectrum, B, Box(nv, L), 1,
+                spectrum, B, Box(n, L), 1,
                 keep_matter=True, psi_axes="xyz", trace=pk.cb,
             )
             return [F.delta_g, F.delta_m] + list(F.psi.values())
 
-        def probe64_leg(pk):
+    elif leg == "probe64":
+
+        def body(pk):
             pk.cb("probe_f64")
-            dg, dm, psi = probe_field_arrays(nv, L, jnp.float64, jnp.complex128)
+            dg, dm, psi = probe_field_arrays(n, L, jnp.float64, jnp.complex128)
             return [dg, dm] + list(psi)
 
-        real_pk = measure(real_leg, "real_stage")
-        probe_pk = measure(probe64_leg, "probe_f64")
-        ratio = probe_pk.peak / real_pk.peak if real_pk.peak else None
-        report["probe_validation"] = {
-            "n": nv,
-            "real_stage_live_peak": real_pk.peak,
-            "probe_live_peak": probe_pk.peak,
-            "ratio": ratio,
-        }
+    else:
 
-        def probe32_leg(pk):
+        def body(pk):
             pk.cb("probe_f32")
             dg, dm, psi = probe_field_arrays(n, L, jnp.float32, jnp.complex64)
             return [dg, dm] + list(psi)
 
-        p = measure(probe32_leg, "probe_f32")
+    p = measure(body, leg)
 
     dp, limit = device_peak()
     report.update(
@@ -239,36 +235,97 @@ def run_ladder(args):
 
     by_name = {b.name: b for b in suite.BIN_SUITE_V28}
     bins = [by_name[nm] for nm in args.bins]
+
+    def child(n, b, pk, dt, leg):
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                LADDER_CHILD,
+                str(n),
+                str(b.L_box),
+                pk,
+                dt,
+                str(b.b),
+                b.name,
+                leg,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        got = [x for x in proc.stdout.splitlines() if x.startswith("@@JSON@@")]
+        return (json.loads(got[-1][len("@@JSON@@") :]) if got else None), proc
+
+    def validate_probe(n, b, pk):
+        """Two independent processes, two exact allocator peaks: does the probe
+        reproduce the real stage's f64 footprint at a size that fits?"""
+        nv = min(n, args.validate_n)
+        out = {"n": nv}
+        for tag, leg in (("real", "real"), ("probe", "probe64")):
+            r, _ = child(nv, b, pk, "f64", leg)
+            out[tag] = (
+                None
+                if r is None
+                else {
+                    "device_peak": r.get("device_peak_bytes"),
+                    "live_peak": r.get("live_peak_bytes"),
+                    "oom": r.get("oom"),
+                }
+            )
+        rd = (out["real"] or {}).get("device_peak")
+        pd = (out["probe"] or {}).get("device_peak")
+        rl = (out["real"] or {}).get("live_peak")
+        pl = (out["probe"] or {}).get("live_peak")
+        if rd and pd:
+            out.update(ratio=pd / rd, instrument="device_allocator")
+        elif rl and pl:
+            out.update(ratio=pl / rl, instrument="live_arrays_indicative")
+        else:
+            out.update(ratio=None, instrument="unavailable")
+        return out
+
     rows = []
     for b in bins:
         for dt in args.dtype:
             n, pk = b.N_grid, resolve_pk(b)
-            proc = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    LADDER_CHILD,
-                    str(n),
-                    str(b.L_box),
-                    pk,
-                    dt,
-                    str(b.b),
-                    b.name,
-                ],
-                capture_output=True,
-                text=True,
-            )
-            line = [x for x in proc.stdout.splitlines() if x.startswith("@@JSON@@")]
-            if not line:
+            validation = validate_probe(n, b, pk) if dt == "f32" else None
+            rep, proc = child(n, b, pk, dt, "full")
+            if validation and rep is not None:
+                rep["probe_validation"] = validation
+            if rep is None:
                 print(
                     f"{b.name} N = {n} [{dt}]: child produced no report "
                     f"(exit {proc.returncode})"
                 )
                 print(proc.stderr[-2000:])
                 continue
-            rep = json.loads(line[-1][len("@@JSON@@") :])
             rows.append(rep)
             n3 = rep["cell_bytes_f64"]
+            # Printed BEFORE the OOM branch: a probe that does not reproduce the
+            # real stage invalidates the point whether or not it also ran out of
+            # memory, and burying that verdict in the JSON hid it once already.
+            v = rep.get("probe_validation")
+            if v:
+                r, instr = v["ratio"], v.get("instrument")
+                if r is None:
+                    verdict = "NOT MEASURED -- treat the f32 figure as unvalidated"
+                elif instr == "device_allocator":
+                    verdict = (
+                        "probe faithful"
+                        if 0.95 <= r <= 1.05
+                        else "PROBE MISMATCH -- the f32 figure below is void"
+                    )
+                else:
+                    # The 1 ms poller has a ~10% spread run to run, so it can
+                    # neither confirm nor refute a 5% discrepancy. It is not
+                    # promoted to a verdict; only the allocator decides.
+                    verdict = "INCONCLUSIVE (no device allocator on this backend)"
+                print(
+                    f"\n   probe check at N = {v['n']} [{instr}]: "
+                    f"probe/real peak = {r:.3f} ({verdict})"
+                    if r is not None
+                    else f"\n   probe check at N = {v['n']}: {verdict}"
+                )
             if rep.get("oom"):
                 lim = rep.get("device_bytes_limit")
                 tail = f" -- allocator limit {lim / GIB:.2f} GiB" if lim else ""
@@ -297,21 +354,6 @@ def run_ladder(args):
                     print(
                         f"   allocator limit  "
                         f"{rep['device_bytes_limit'] / GIB:6.2f} GiB"
-                    )
-            v = rep.get("probe_validation")
-            if v:
-                r = v["ratio"]
-                if r is None:
-                    print(f"   probe check at N = {v['n']}: NOT MEASURED")
-                else:
-                    verdict = (
-                        "probe faithful"
-                        if 0.95 <= r <= 1.05
-                        else "PROBE MISMATCH -- f32 figure is not trustworthy"
-                    )
-                    print(
-                        f"   probe check at N = {v['n']}: probe/real live peak = "
-                        f"{r:.3f} ({verdict})"
                     )
             print(f"   host ru_maxrss   {rep['ru_maxrss_bytes'] / GIB:6.2f} GiB")
     if args.out:
@@ -471,6 +513,12 @@ def main():
         help="bin06/bin07 also run at 512^3, so bin05 stands for all three",
     )
     p.add_argument("--dtype", nargs="+", default=["f64"], choices=["f64", "f32"])
+    p.add_argument(
+        "--validate-n",
+        type=int,
+        default=128,
+        help="grid for the f32 probe's f64 self-check; must fit the device",
+    )
     p.add_argument("--out")
     p.set_defaults(func=run_ladder)
 
