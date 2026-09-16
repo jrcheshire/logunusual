@@ -44,13 +44,19 @@ echo
 
 run() { echo; echo "##### $* #####"; pixi run -e gpu python -u "$@"; echo "exit=$?"; }
 
+# No nested double quotes inside the f-string: this block is already inside a
+# single-quoted shell argument, and escaping them there leaves the backslashes in
+# the Python source (job 1957 died on exactly that, and blamed the GPU for it).
 echo "##### phase 0: device check #####"
 pixi run -e gpu python -u -c '
 import jax
-assert any(d.platform == "gpu" for d in jax.devices()), "no CUDA device"
-s = jax.local_devices()[0].memory_stats() or {}
-print("devices:", jax.devices(), " limit:", f"{s.get(\"bytes_limit\", 0) / 2**30:.2f} GiB")
-' || { echo "PHASE 0 FAILED -- no CUDA device"; exit 1; }
+devs = jax.devices()
+print("devices:", devs)
+assert any(d.platform == "gpu" for d in devs), "no CUDA device"
+stats = jax.local_devices()[0].memory_stats() or {}
+lim = stats.get("bytes_limit")
+print("allocator limit:", "%.2f GiB" % (lim / 2**30) if lim else "unreported")
+' || { echo "PHASE 0 FAILED -- see the traceback above; it is NOT necessarily the GPU"; exit 1; }
 
 # ---- phase 1: the whole f64 ladder at 0.95; bin03 is the question ------------
 run scripts/m3_device.py ladder --bins bin01 bin02 bin03 bin04 bin05 \
