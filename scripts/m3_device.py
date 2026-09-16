@@ -1,0 +1,495 @@
+"""M3: device memory, CPU-vs-CUDA agreement and per-stage wall of the field stage.
+
+    pixi run -e gpu python scripts/m3_device.py ladder
+    pixi run -e gpu python scripts/m3_device.py ladder --bins bin05 --dtype f32
+    pixi run -e gpu python scripts/m3_device.py ulp --n 64 128 256
+    pixi run -e gpu python scripts/m3_device.py wall --bin bin05
+
+`ladder` walks the v28 bins at their production `(N_grid, L_box, b)` -- bin01..bin05
+cover every distinct grid size, since bin06 and bin07 also run at 512^3 and a
+footprint is set by shape, not by which spectrum is on the grid. It runs one
+subprocess per point (a JAX process keeps no resettable peak counter) and reports TWO
+instruments: live `jax.live_arrays()` bytes, the M1 G9 instrument, and the device
+allocator's `peak_bytes_in_use`, which also counts XLA intra-op scratch and is
+therefore what decides whether a grid fits. An out-of-memory point is a RESULT: the
+child reports `oom` and exits 0, and only a non-OOM failure is an error.
+
+`--dtype f32` runs `probe_field_arrays`, a replica of `field.generate_fields`'s array
+sequence, NOT the field stage (the package is float64-only by construction). It earns
+its number by running at f64 first in the same process and matching the real stage's
+f64 peak; the ratio check is reported and a mismatch invalidates the f32 figure.
+
+`ulp` compares the two backends inside ONE process, so a single jaxlib build is on
+both sides and the difference is the backend, not the wheel.
+
+`wall` blocks on every live array at each step boundary, which serialises JAX's async
+dispatch: the per-stage numbers are upper bounds and their sum exceeds the unblocked
+end-to-end time, which is reported alongside.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+import numpy as np
+
+FIXTURE_PK = "tests/data/matterpower_camb_zeff=0.9.tsv"
+GIB = 2**30
+
+
+def resolve_pk(bin_):
+    """`data/<pk_file>` if the checkout has it, else the committed bin05 fixture.
+
+    `data/` is gitignored, so a fresh clone carries only the z_eff = 0.9 spectrum.
+    A footprint is set by shape, so the fallback is sound for `ladder`; `wall`
+    prints which file it used.
+    """
+    for path in (f"data/{bin_.pk_file}", f"tests/data/{bin_.pk_file}"):
+        if os.path.exists(path):
+            return path
+    return FIXTURE_PK
+
+
+# --------------------------------------------------------------------------- ladder
+
+LADDER_CHILD = r"""
+import os, sys, json, resource, threading, time
+os.environ.setdefault("JAX_ENABLE_X64", "1")
+import jax
+import jax.numpy as jnp
+import numpy as np
+from logunusual import field
+from logunusual.grid import Box, k_components
+from logunusual.pk import PowerSpectrum, grid_pkG
+
+n, L, pk_file, dtype = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3], sys.argv[4]
+B, name = float(sys.argv[5]), sys.argv[6]
+spectrum = PowerSpectrum.from_tsv(pk_file)
+
+
+def live_bytes():
+    return sum(int(a.nbytes) for a in jax.live_arrays())
+
+
+def device_peak():
+    try:
+        s = jax.local_devices()[0].memory_stats() or {}
+    except Exception:
+        return None, None
+    return s.get("peak_bytes_in_use"), s.get("bytes_limit")
+
+
+def probe_field_arrays(n, L, real_dt, cplx_dt):
+    '''Mirror of field.generate_fields's ARRAY SEQUENCE at a chosen dtype.
+
+    Kept deliberately literal so it can be diffed against field.generate_fields;
+    the caller validates it at f64 before trusting an f32 number from it.
+    '''
+    box = Box(n, L)
+    w = np.random.default_rng(0).standard_normal(box.shape, dtype=np.float64)
+    white_k = jnp.fft.rfftn(jnp.asarray(w, dtype=real_dt)).astype(cplx_dt)
+    del w
+    out = []
+    for target_b in (B, 1.0):
+        P = field.target_on_grid(lambda k: target_b * target_b * spectrum(k), box, 1)
+        pkG, _ = grid_pkG(P, box, jnp)
+        pkG = jnp.asarray(pkG, dtype=real_dt)
+        amp = jnp.sqrt(pkG / box.v_cell)
+        del pkG
+        G = jnp.fft.irfftn(white_k * amp, s=box.shape, axes=(0, 1, 2)).astype(real_dt)
+        del amp
+        e = jnp.exp(G)
+        del G
+        out.append((e / jnp.mean(e) - 1.0).astype(real_dt))
+        del e
+    delta_g, delta_m = out
+    delta_m_k = jnp.fft.rfftn(delta_m).astype(cplx_dt)
+    comps = [jnp.asarray(a, dtype=real_dt) for a in k_components(box)]
+    k2 = comps[0] ** 2 + comps[1] ** 2 + comps[2] ** 2
+    k2 = k2.at[0, 0, 0].set(1.0)
+    psi = []
+    for ax in range(3):
+        psi_k = (1j * comps[ax] / k2 * delta_m_k).astype(cplx_dt)
+        psi_k = psi_k.at[0, 0, 0].set(0.0)
+        psi.append(
+            jnp.fft.irfftn(psi_k, s=box.shape, axes=(0, 1, 2)).astype(real_dt)
+        )
+        del psi_k
+    del delta_m_k
+    return delta_g, delta_m, psi
+
+
+class Peak:
+    def __init__(self):
+        self.label, self.peak, self.peak_label, self.stop = "start", 0, "start", False
+        self.trace = []
+
+    def cb(self, label):
+        self.trace.append((label, live_bytes()))
+        self.label = label
+
+    def poll(self):
+        while not self.stop:
+            b = live_bytes()
+            if b > self.peak:
+                self.peak, self.peak_label = b, "after '" + self.label + "'"
+            time.sleep(0.001)
+
+
+report = {"bin": name, "n": n, "dtype": dtype, "L": L, "b": B, "pk": pk_file}
+try:
+    # Warm-up at a small N: compilation and the CUDA context allocate.
+    field.generate_fields(spectrum, B, Box(32, L), 0)
+    report["warmup_device_peak_bytes"] = device_peak()[0]
+
+    def measure(fn, label):
+        '''Peak live JAX bytes over one leg, in its own poller.'''
+        pk = Peak()
+        pk.label = label
+        th = threading.Thread(target=pk.poll, daemon=True)
+        th.start()
+        try:
+            res = fn(pk)
+            jax.block_until_ready(res)
+        finally:
+            pk.stop = True
+            th.join()
+        return pk
+
+    if dtype == "f64":
+
+        def leg(pk):
+            F = field.generate_fields(
+                spectrum, B, Box(n, L), 1, keep_matter=True, psi_axes="xyz", trace=pk.cb
+            )
+            return [F.delta_g, F.delta_m] + list(F.psi.values())
+
+        p = measure(leg, "field_stage")
+    else:
+        # The probe earns its f32 number by reproducing the REAL stage's f64
+        # footprint at a small N first. `memory_stats()` is None on CPU, so the
+        # comparison uses the live-array instrument, which both backends have.
+        nv = min(n, 128)
+
+        def real_leg(pk):
+            F = field.generate_fields(
+                spectrum, B, Box(nv, L), 1,
+                keep_matter=True, psi_axes="xyz", trace=pk.cb,
+            )
+            return [F.delta_g, F.delta_m] + list(F.psi.values())
+
+        def probe64_leg(pk):
+            pk.cb("probe_f64")
+            dg, dm, psi = probe_field_arrays(nv, L, jnp.float64, jnp.complex128)
+            return [dg, dm] + list(psi)
+
+        real_pk = measure(real_leg, "real_stage")
+        probe_pk = measure(probe64_leg, "probe_f64")
+        ratio = probe_pk.peak / real_pk.peak if real_pk.peak else None
+        report["probe_validation"] = {
+            "n": nv,
+            "real_stage_live_peak": real_pk.peak,
+            "probe_live_peak": probe_pk.peak,
+            "ratio": ratio,
+        }
+
+        def probe32_leg(pk):
+            pk.cb("probe_f32")
+            dg, dm, psi = probe_field_arrays(n, L, jnp.float32, jnp.complex64)
+            return [dg, dm] + list(psi)
+
+        p = measure(probe32_leg, "probe_f32")
+
+    dp, limit = device_peak()
+    report.update(
+        ok=True,
+        oom=False,
+        live_peak_bytes=p.peak,
+        live_peak_after=p.peak_label,
+        device_peak_bytes=dp,
+        device_bytes_limit=limit,
+        trace=[(l, b) for l, b in p.trace],
+    )
+except Exception as exc:
+    text = f"{type(exc).__name__}: {exc}"
+    is_oom = ("RESOURCE_EXHAUSTED" in text) or ("out of memory" in text.lower())
+    dp, limit = device_peak()
+    report.update(
+        ok=not is_oom,
+        oom=is_oom,
+        error=text[:600],
+        device_peak_bytes=dp,
+        device_bytes_limit=limit,
+    )
+
+report["cell_bytes_f64"] = n**3 * 8
+report["ru_maxrss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (
+    1 if sys.platform == "darwin" else 1024
+)
+report["device"] = str(jax.devices()[0])
+print("@@JSON@@" + json.dumps(report))
+sys.exit(0 if (report["ok"] or report["oom"]) else 1)
+"""
+
+
+def run_ladder(args):
+    from logunusual import suite
+
+    by_name = {b.name: b for b in suite.BIN_SUITE_V28}
+    bins = [by_name[nm] for nm in args.bins]
+    rows = []
+    for b in bins:
+        for dt in args.dtype:
+            n, pk = b.N_grid, resolve_pk(b)
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    LADDER_CHILD,
+                    str(n),
+                    str(b.L_box),
+                    pk,
+                    dt,
+                    str(b.b),
+                    b.name,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            line = [x for x in proc.stdout.splitlines() if x.startswith("@@JSON@@")]
+            if not line:
+                print(
+                    f"{b.name} N = {n} [{dt}]: child produced no report "
+                    f"(exit {proc.returncode})"
+                )
+                print(proc.stderr[-2000:])
+                continue
+            rep = json.loads(line[-1][len("@@JSON@@") :])
+            rows.append(rep)
+            n3 = rep["cell_bytes_f64"]
+            if rep.get("oom"):
+                lim = rep.get("device_bytes_limit")
+                tail = f" -- allocator limit {lim / GIB:.2f} GiB" if lim else ""
+                print(f"\n{b.name} N = {n} [{dt}]: OUT OF MEMORY (a result){tail}")
+                print(f"   {rep['error'].splitlines()[0][:200]}")
+                continue
+            if not rep.get("ok"):
+                print(
+                    f"\n{b.name} N = {n} [{dt}]: FAILED (not OOM) -- "
+                    f"{rep.get('error', '')[:300]}"
+                )
+                continue
+            dp = rep.get("device_peak_bytes")
+            lv = rep.get("live_peak_bytes", 0)
+            print(f"\n{b.name}  N = {n}  L = {b.L_box:g}  [{dt}]  {rep['device']}")
+            print(
+                f"   live JAX arrays  {lv / GIB:6.2f} GiB  "
+                f"({lv / n3:.2f} x N^3 f64)  {rep.get('live_peak_after', '')}"
+            )
+            if dp:
+                print(
+                    f"   device allocator {dp / GIB:6.2f} GiB  "
+                    f"({dp / n3:.2f} x N^3 f64)   <- decides the fit"
+                )
+                if rep.get("device_bytes_limit"):
+                    print(
+                        f"   allocator limit  "
+                        f"{rep['device_bytes_limit'] / GIB:6.2f} GiB"
+                    )
+            v = rep.get("probe_validation")
+            if v:
+                r = v["ratio"]
+                if r is None:
+                    print(f"   probe check at N = {v['n']}: NOT MEASURED")
+                else:
+                    verdict = (
+                        "probe faithful"
+                        if 0.95 <= r <= 1.05
+                        else "PROBE MISMATCH -- f32 figure is not trustworthy"
+                    )
+                    print(
+                        f"   probe check at N = {v['n']}: probe/real live peak = "
+                        f"{r:.3f} ({verdict})"
+                    )
+            print(f"   host ru_maxrss   {rep['ru_maxrss_bytes'] / GIB:6.2f} GiB")
+    if args.out:
+        with open(args.out, "w") as fh:
+            json.dump(rows, fh, indent=2)
+        print(f"\nwrote {args.out}")
+
+
+# ------------------------------------------------------------------------------ ulp
+
+
+def ulp_distance(a, b):
+    """Elementwise |a - b| in units of the local ULP, at the larger magnitude."""
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    scale = np.spacing(np.maximum(np.abs(a), np.abs(b)))
+    scale = np.where(scale == 0, np.spacing(np.float64(0)), scale)
+    return np.abs(a - b) / scale
+
+
+def run_ulp(args):
+    import jax
+
+    from logunusual import field
+    from logunusual.grid import Box
+    from logunusual.pk import PowerSpectrum
+
+    spectrum = PowerSpectrum.from_tsv(args.pk)
+    cpu = jax.devices("cpu")[0]
+    try:
+        gpu = jax.devices("gpu")[0]
+    except RuntimeError:
+        print("no CUDA device visible to JAX -- ulp mode needs both backends")
+        return
+    print(f"CPU: {cpu}   CUDA: {gpu}   jax {jax.__version__}\n")
+
+    rows = []
+    for n in args.n:
+        out = {}
+        for name, dev in (("cpu", cpu), ("gpu", gpu)):
+            with jax.default_device(dev):
+                F = field.generate_fields(
+                    spectrum, 1.76, Box(n, args.L), 1, keep_matter=True, psi_axes="xyz"
+                )
+                out[name] = {
+                    "delta_g": np.asarray(F.delta_g),
+                    "delta_m": np.asarray(F.delta_m),
+                    **{f"psi_{a}": np.asarray(F.psi[a]) for a in "xyz"},
+                }
+                del F
+        row = {"n": n, "fields": {}}
+        print(f"N = {n}")
+        for key in out["cpu"]:
+            a, b = out["cpu"][key], out["gpu"][key]
+            u = ulp_distance(a, b)
+            rms = float(np.sqrt(np.mean(a**2)))
+            rec = {
+                "max_ulp": float(u.max()),
+                "median_ulp": float(np.median(u)),
+                "p99_ulp": float(np.percentile(u, 99)),
+                "max_abs": float(np.abs(a - b).max()),
+                "rms_of_field": rms,
+                "bitwise": bool(np.array_equal(a, b)),
+            }
+            row["fields"][key] = rec
+            print(
+                f"   {key:8s} max {rec['max_ulp']:10.1f} ulp   p99 "
+                f"{rec['p99_ulp']:6.1f}   median {rec['median_ulp']:5.1f}   "
+                f"max|d| {rec['max_abs']:.3e}  (field rms {rms:.3e})"
+                + ("   BITWISE" if rec["bitwise"] else "")
+            )
+        rows.append(row)
+        print()
+    if args.out:
+        with open(args.out, "w") as fh:
+            json.dump(rows, fh, indent=2)
+        print(f"wrote {args.out}")
+
+
+# ----------------------------------------------------------------------------- wall
+
+
+def run_wall(args):
+    import time
+
+    import jax
+
+    from logunusual import field, suite
+    from logunusual.grid import Box
+    from logunusual.pk import PowerSpectrum
+
+    b = {x.name: x for x in suite.BIN_SUITE_V28}[args.bin]
+    pk = args.pk or resolve_pk(b)
+    spectrum = PowerSpectrum.from_tsv(pk)
+    box = Box(b.N_grid, b.L_box)
+    print(
+        f"{b.name}: N = {b.N_grid}, L = {b.L_box} Mpc/h, b = {b.b}, z_eff = {b.z_eff}"
+    )
+    print(f"device {jax.devices()[0]}   pk {pk}\n")
+
+    field.generate_fields(spectrum, b.b, Box(32, b.L_box), 0)  # warm-up
+
+    marks = []
+
+    def cb(label):
+        jax.block_until_ready(list(jax.live_arrays()))
+        marks.append((label, time.perf_counter()))
+
+    t0 = time.perf_counter()
+    F = field.generate_fields(
+        spectrum, b.b, box, 1, keep_matter=True, psi_axes="xyz", trace=cb
+    )
+    jax.block_until_ready([F.delta_g, F.delta_m] + list(F.psi.values()))
+    t_blocked = time.perf_counter() - t0
+
+    prev = t0
+    for label, t in marks:
+        print(f"   {label:12s} {t - prev:7.2f} s")
+        prev = t
+    print(f"\n   field stage, serialised by the per-step blocks: {t_blocked:.2f} s")
+
+    t0 = time.perf_counter()
+    F2 = field.generate_fields(spectrum, b.b, box, 2, keep_matter=True, psi_axes="xyz")
+    jax.block_until_ready([F2.delta_g, F2.delta_m] + list(F2.psi.values()))
+    t_free = time.perf_counter() - t0
+    print(f"   field stage, unblocked end to end:              {t_free:.2f} s")
+    if args.out:
+        with open(args.out, "w") as fh:
+            json.dump(
+                {
+                    "bin": b.name,
+                    "n": b.N_grid,
+                    "L": b.L_box,
+                    "stages": [
+                        (label, t - (t0 if i == 0 else marks[i - 1][1]))
+                        for i, (label, t) in enumerate(marks)
+                    ],
+                    "blocked_s": t_blocked,
+                    "unblocked_s": t_free,
+                    "device": str(jax.devices()[0]),
+                },
+                fh,
+                indent=2,
+            )
+        print(f"\nwrote {args.out}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    sub = ap.add_subparsers(dest="mode", required=True)
+
+    p = sub.add_parser("ladder", help="peak device memory per production bin")
+    p.add_argument(
+        "--bins",
+        nargs="+",
+        default=["bin01", "bin02", "bin03", "bin04", "bin05"],
+        help="bin06/bin07 also run at 512^3, so bin05 stands for all three",
+    )
+    p.add_argument("--dtype", nargs="+", default=["f64"], choices=["f64", "f32"])
+    p.add_argument("--out")
+    p.set_defaults(func=run_ladder)
+
+    p = sub.add_parser("ulp", help="CPU vs CUDA agreement of the field stage")
+    p.add_argument("--n", type=int, nargs="+", default=[64, 128, 256])
+    p.add_argument("--L", type=float, default=5000.0)
+    p.add_argument("--pk", default=FIXTURE_PK)
+    p.add_argument("--out")
+    p.set_defaults(func=run_ulp)
+
+    p = sub.add_parser("wall", help="per-stage wall for one production bin")
+    p.add_argument("--bin", default="bin05")
+    p.add_argument("--pk")
+    p.add_argument("--out")
+    p.set_defaults(func=run_wall)
+
+    args = ap.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

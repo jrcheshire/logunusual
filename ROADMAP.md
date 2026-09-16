@@ -144,7 +144,7 @@ above and the plane-parallel physics is M1 G6.
 
 ## M3 -- Performance and memory
 
-Per-bin wall and peak allocation on the laptop, on deneb's RTX 3050 (8 GB: float32 fields
+Per-bin wall and peak allocation on the laptop, on deneb's RTX 3050 (6 GB: float32 fields
 or slab FFTs), and one TACC GPU node, tabulated against the Julia baseline above. CPU vs
 CUDA agreement of the field stage recorded in ULPs (moved here from M1); `jax.jit` of
 the field stage with a bitwise-before-jit check. Targets

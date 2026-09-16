@@ -33,7 +33,8 @@ Remote: `github.com/jrcheshire/logunusual`.
 ## Build / test / run
 
 Env tool is **pixi**; platforms `osx-arm64` (laptop, JAX CPU fp64), `linux-64`
-(deneb, RTX 3050 8 GB), `linux-aarch64` (TACC Vista).
+(deneb, RTX 3050 **6 GB** -- `nvidia-smi` reports 6144 MiB, 2026-09-15; earlier
+notes here said 8 GB), `linux-aarch64` (TACC Vista).
 
 ```sh
 pixi install                 # conda env; `default` and `gpu` share one solve-group
@@ -54,7 +55,8 @@ pixi run lint                # flake8, max-line 88, ignore E203
   `JAX_PLATFORMS=cpu` (umbrella memory `reference_pixi_gotchas`).
 - **`pixi.lock` co-commit invariant:** a dependency-spec change to `pyproject.toml` needs
   `pixi install` + the regenerated lock in the same commit; metadata/version-only edits
-  leave it byte-identical (`pixi install --locked` is the check). No CI yet (added in M1).
+  leave it byte-identical (`pixi install --locked` is the check). `.github/workflows/ci.yml`
+  exists, but GitHub **Actions is disabled on the repository**, so no run has ever fired.
 - `data/`, `outputs/`, `runs/` and all `*.parq*`/`*.npz`/`*.png` are gitignored. Input
   P(k) TSVs and the mask h5 live on the LogNormalSimulations
   `jc/spherex-broad-bin-inputs` branch and in
