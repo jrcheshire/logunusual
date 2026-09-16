@@ -152,6 +152,52 @@ are measured, not asserted: a 512^3 bin under 15 GB; a 7-bin realization on the 
 single-digit minutes with parquet I/O as the floor. Any regression-guarding number lives
 in a test that states what it measured and on which machine.
 
+### Measured on deneb's RTX 3050, 2026-09-15 (jobs 1956 / 1958, commit `0229230`)
+
+The card reports 6144 MiB. JAX's allocator limit is **4.25 GiB** by default and
+**5.38 GiB** at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`. Peak per bin, float64, from
+`scripts/m3_device.py ladder`:
+
+| bin | N | live arrays (G9) | device allocator | fits 4.25 | fits 5.38 |
+|---|---|---|---|---|---|
+| bin01 | 192 | 0.40 GiB (7.54x) | 0.64 GiB (12.08x) | yes | yes |
+| bin02 | 256 | 0.94 GiB (7.53x) | 1.51 GiB (12.06x) | yes | yes |
+| bin03 | 384 | 3.17 GiB (7.52x) | 4.75 GiB (11.27x) | no | **yes** |
+| bin04 | 448 | -- | > 5.38 GiB | no | no |
+| bin05-07 | 512 | -- | > 5.38 GiB | no | no |
+
+**The allocator peak, not G9's live-array count, is what decides the fit**: XLA's
+intra-op scratch adds 50-60% on top, and the fraction falls with grid size (1.60x at
+192^3 and 256^3, 1.50x at 384^3). The 7.0-7.5 x N^3 float64 figure recorded from the
+laptop is a true live-array count and is not the requirement.
+
+**Float32 is not a rescue for the 512^3 bins.** The f32 ladder ran through a probe
+that reproduces the field stage's array sequence, and the probe failed its own
+self-check (1.084 against the real stage's f64 allocator peak at 256^3, exact), so its
+numbers are UPPER BOUNDS, not measurements: bin03 <= 2.75 GiB and bin04 <= 4.20 GiB
+both fit, bin05 exceeded 5.38 GiB. Discounting the 8.4% still leaves 512^3 over the
+limit, so the three 512^3 bins need chunked/slab FFTs or a larger card in either
+precision. A real answer needs a dtype knob in `field.py`, not a probe.
+
+**Wall, float64, unblocked end to end:** bin01 0.46 s, bin02 0.97 s. The laptop CPU
+(M4 Max) does bin01 in 0.43 s, so this card gives **no speedup** on the field stage --
+expected, since consumer Ampere runs float64 at a small fraction of its float32 rate.
+Cross-machine, so directional rather than a controlled comparison.
+
+Two instrument notes worth keeping: `wall` OOMed at bin03 although the ladder fits it,
+because its per-step `block_until_ready` over `live_arrays()` allocates -- at the edge
+of the card the instrument changes the outcome. And the live-array poller has a ~10%
+spread run to run, so only the device allocator can adjudicate a percent-level band.
+
+**CPU vs CUDA (job 1956, `runs/m3/ulp.json`), one process, one jaxlib:** median 6-12
+ulp, p99 400-4000, max |diff| 4e-15 to 1.6e-13 on fields of rms 0.18-3.8, i.e. ~1e-14
+relative. **Not bitwise.** The max-ulp figures (up to 1.9e9) are an artefact of the
+metric at zero crossings and should not be quoted.
+
+**Still owed by M3:** `jax.jit` of the field stage with a bitwise-before-jit check, the
+TACC GPU leg, and the sample stage (80% of the laptop wall) -- none of which this pass
+touched.
+
 ## M4 -- Physics upgrades (each opens its own plan session)
 
 - **Nonlinear input P(k):** halofit TSVs (a flag in `make_matter_power.py`) together

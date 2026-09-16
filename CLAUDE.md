@@ -223,7 +223,13 @@ because galaxies cross them in both directions (G10).
   on macOS (umbrella memory: XLA CPU on macOS-arm64 can wobble in the last bit).
   Measured 2026-09-04 on the M4 laptop: identical bytes at 32^3 and 64^3.
 - Memory: JAX arrays are invisible to tracemalloc and `memory_stats()` is None on CPU;
-  `scripts/m1_memory.py` polls `jax.live_arrays()` (misses XLA scratch, says so).
+  `scripts/m1_memory.py` polls `jax.live_arrays()` (misses XLA scratch, says so). On a
+  device that HAS an allocator, the scratch it misses is 50-60% on top: measured
+  2026-09-15 on deneb's RTX 3050, the field stage's allocator peak is 12.1 x N^3 float64
+  at 192^3 and 256^3 and 11.3x at 384^3, against 7.5x live. **The allocator peak decides
+  whether a grid fits; the live count does not.** `scripts/m3_device.py` reports both.
+  The poller is also a sampling instrument with ~10% run-to-run spread, so it cannot
+  settle a percent-level question on its own.
 - Where the time went in the Julia reference (bin 5, 512^3, laptop): field 8 s, draw
   104 s single-threaded, constraint randoms 64 s, estimator 35 s; peak 75 GB. Here
   (2026-09-04, laptop CPU, full-density seven-bin realization): 187 s wall for all
