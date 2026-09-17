@@ -469,16 +469,18 @@ def run_wall(args):
     jax.block_until_ready([F.delta_g, F.delta_m] + list(F.psi.values()))
     t_blocked = time.perf_counter() - t0
 
+    stages = []
     prev = t0
     for label, t in marks:
+        stages.append((label, t - prev))
         print(f"   {label:12s} {t - prev:7.2f} s")
         prev = t
     print(f"\n   field stage, serialised by the per-step blocks: {t_blocked:.2f} s")
 
-    t0 = time.perf_counter()
+    t1 = time.perf_counter()
     F2 = field.generate_fields(spectrum, b.b, box, 2, keep_matter=True, psi_axes="xyz")
     jax.block_until_ready([F2.delta_g, F2.delta_m] + list(F2.psi.values()))
-    t_free = time.perf_counter() - t0
+    t_free = time.perf_counter() - t1
     print(f"   field stage, unblocked end to end:              {t_free:.2f} s")
     if args.out:
         with open(args.out, "w") as fh:
@@ -487,10 +489,7 @@ def run_wall(args):
                     "bin": b.name,
                     "n": b.N_grid,
                     "L": b.L_box,
-                    "stages": [
-                        (label, t - (t0 if i == 0 else marks[i - 1][1]))
-                        for i, (label, t) in enumerate(marks)
-                    ],
+                    "stages": stages,
                     "blocked_s": t_blocked,
                     "unblocked_s": t_free,
                     "device": str(jax.devices()[0]),
