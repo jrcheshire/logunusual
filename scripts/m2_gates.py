@@ -2,8 +2,9 @@
 
     pixi run python scripts/m2_gates.py [--n 128] [--L 1000] [--seeds 16] [--nbar 3e-3]
 
-The same functions back `tests/test_gates_m2.py`. The shell is bin 5 scaled into the
-box (rmin/rmax/buffer at L / L_box5); the mask is an equatorial band, fsky ~ 0.7.
+The same functions back `tests/test_gates_m2.py`. The shell has bin 5's thickness
+scaled into the box, placed so a buffer satisfying the field-time bound fits under L/2
+(`--shell`); the mask is an equatorial band, fsky ~ 0.7.
 """
 
 import argparse
@@ -53,7 +54,16 @@ def main():
         help="seed count the G11 bands are sized for",
     )
     ap.add_argument("--nbar", type=float, default=3e-3)
-    ap.add_argument("--bin", type=int, default=5, help="v28 bin whose b, f, TSV, shell")
+    ap.add_argument("--bin", type=int, default=5, help="v28 bin whose b, f, TSV")
+    ap.add_argument(
+        "--shell",
+        type=float,
+        nargs=3,
+        default=(300.0, 371.1, 90.0),
+        metavar=("RMIN", "RMAX", "BUFFER"),
+        help="shell in the gate box; the buffer must satisfy the field-time bound "
+        "sqrt(3)/2 dx + f max|Psi| (40-68 Mpc/h measured at 128^3, 2026-09-20)",
+    )
     ap.add_argument("--pk", default=None, help="TSV path (default: the bin's file)")
     ap.add_argument("--out", default="runs/m2_gates")
     args = ap.parse_args()
@@ -61,8 +71,7 @@ def main():
     b = suite.BIN_SUITE_V28[args.bin - 1]
     spectrum = PowerSpectrum.from_tsv(args.pk or b.matterpower_file)
     box = Box(args.n, args.L)
-    scale = args.L / b.L_box
-    sh = shell.Shell(b.rmin * scale, b.rmax * scale, suite.RADIAL_BUFFER * scale)
+    sh = shell.Shell(*args.shell)
     sh.check_box(box)
     mask = band_mask()
     print(f"generator {box}  shell {sh}  b={b.b} f={b.f:.4f} nbar={args.nbar}")

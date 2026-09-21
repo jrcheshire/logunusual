@@ -26,7 +26,7 @@ TOY_BINS = [
         z_max=0.1,
         z_eff=0.9,
         rmin=0.0,
-        rmax=60.0,
+        rmax=40.0,
         L_box=170.0,
         N_grid=16,
         nbar=1e-2,
@@ -41,15 +41,15 @@ TOY_BINS = [
         z_max=0.2,
         z_eff=0.9,
         rmin=60.0,
-        rmax=110.0,
-        L_box=270.0,
+        rmax=100.0,
+        L_box=300.0,
         N_grid=24,
         nbar=4e-3,
         b=1.8,
         f=0.85,
         pk_file=PK,
     ),
-]  # dx ~ 10.6 / 11.25; buffer 20 > diagonal 19.5
+]  # dx ~ 10.6 / 12.5; buffer 45 covers half-diagonal + f max|Psi| (~31 measured)
 
 
 def _mask(path, nside=8):
@@ -74,7 +74,7 @@ def _cfg(tmp_path, pk_dir=DATA, **kw):
         pk_dir=str(pk_dir),
         mask={"path": str(tmp_path / "mask.h5")},
         bins=TOY_BINS,
-        radial_buffer=20.0,
+        radial_buffer=45.0,
         row_group_rows=1000,
     )
     d.update(kw)

@@ -12,8 +12,12 @@ pytestmark = pytest.mark.slow
 
 B5, F5 = 1.76, 0.8550542749312783  # bin-5 bias and growth rate (suite.py)
 BOX = Box(128, 1000.0)  # dx 7.8 Mpc/h, production-like cell
-# bin 5 scaled into the box: rmin/rmax/buffer at 1/5 (shell thickness 71 = 9 cells)
-SHELL = shell.Shell(386.4, 457.5, 30.0)
+# bin 5's shell thickness scaled into the box (71 Mpc/h = 9 cells), placed so that a
+# 90 Mpc/h buffer fits under L/2: the field-time bound sqrt(3)/2 dx + f max|Psi| over
+# the window measured 40-68 Mpc/h across 16 seeds at this grid (2026-09-20), so the
+# 30 Mpc/h the scaled production buffer gave was NOT sufficient and could not be
+# raised in place (L/2 - rmax was 42.5).
+SHELL = shell.Shell(300.0, 371.1, 90.0)
 NBAR = 3e-3
 
 

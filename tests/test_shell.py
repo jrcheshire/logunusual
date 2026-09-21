@@ -256,7 +256,7 @@ def test_sample_shell_uniform_field_is_poisson_in_the_shell(spectrum, mask):
 @pytest.mark.parametrize("workers", [3, 8, None])
 def test_sample_shell_is_the_same_for_any_thread_count(spectrum, mask, workers):
     box = Box(16, 160.0)
-    s = shell.Shell(20.0, 50.0, 20.0)
+    s = shell.Shell(20.0, 40.0, 35.0)  # buffer above the field-time bound (~25)
     F = field.generate_fields(spectrum, 1.5, box, 21, psi_axes="xyz")
 
     def run(w):
@@ -277,6 +277,39 @@ def test_sample_shell_is_the_same_for_any_thread_count(spectrum, mask, workers):
     assert sa.n_kept > 0
 
 
+def test_buffer_guard_uses_the_field_and_trips_on_a_large_displacement(spectrum):
+    box = Box(16, 160.0)  # dx 10, half diagonal 8.66
+    s = shell.Shell(20.0, 40.0, 35.0)
+    F = field.generate_fields(spectrum, 1.5, box, 41, psi_axes="xyz")
+    f = 0.8
+    psi = F.psi_flat("xyz")
+    W = shell.cell_window(box, s).reshape(-1)
+    psi_max = np.sqrt((psi[W] ** 2).sum(1)).max()
+    need = 0.5 * np.sqrt(3.0) * box.dx + f * psi_max
+    assert shell.Shell.required_buffer(box, f, psi_max) == need
+    assert 20.0 < need < 35.0, need  # a 20 buffer would NOT have covered this field
+    st = None
+    for _, st in shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1):
+        pass
+    assert st.psi_max == psi_max and st.required_buffer == need
+    # one window cell with a huge displacement: the guard raises, naming the need
+    i, j, k = np.unravel_index(np.flatnonzero(W)[0], box.shape)
+    big = np.asarray(F.psi["x"]).copy()
+    big[i, j, k] = 100.0
+    F.psi["x"] = big
+    with pytest.raises(ValueError, match="radial buffer 35 Mpc/h is below the 8"):
+        list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
+    # a cell OUTSIDE the window does not count
+    out = np.unravel_index(np.flatnonzero(~W)[0], box.shape)
+    big[i, j, k] = np.asarray(F.psi["y"])[i, j, k]
+    big[out] = 100.0
+    list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
+    # without RSD nothing moves: only the half diagonal is needed
+    for _, st in shell.sample_shell(F, s, None, 5e-3, 42, f=f, rsd=False, n_workers=1):
+        pass
+    assert st.psi_max == 0.0 and st.required_buffer == 0.5 * np.sqrt(3.0) * box.dx
+
+
 def test_radial_histogram_matches_numpy_including_edges():
     edges = np.linspace(20.0, 50.0, 9)
     rng = np.random.default_rng(4)
@@ -295,7 +328,7 @@ def test_radial_histogram_matches_numpy_including_edges():
 
 def test_sample_shell_real_space_and_redshift_space_share_the_draw(spectrum):
     box = Box(16, 160.0)
-    s = shell.Shell(20.0, 50.0, 20.0)
+    s = shell.Shell(20.0, 40.0, 35.0)
     F = field.generate_fields(spectrum, 1.5, box, 31, psi_axes="xyz")
 
     def run(rsd):
@@ -307,7 +340,7 @@ def test_sample_shell_real_space_and_redshift_space_share_the_draw(spectrum):
     real, s_real = run(False)
     red, s_red = run(True)
     assert s_real.n_drawn == s_red.n_drawn  # same Poisson draw and placement
-    assert np.all(np.linalg.norm(real, axis=1) <= 50.0)
+    assert np.all(np.linalg.norm(real, axis=1) <= 40.0)
     assert not np.array_equal(real.shape, red.shape) or not np.array_equal(real, red)
     with pytest.raises(ValueError, match="displacement"):
         G = field.generate_fields(spectrum, 1.5, box, 31, psi_axes="z")

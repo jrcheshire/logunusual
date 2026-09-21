@@ -49,6 +49,15 @@ class Shell:
         """Full-sky shell volume `4/3 pi (rmax^3 - rmin^3)`."""
         return 4.0 / 3.0 * np.pi * (self.rmax**3 - self.rmin**3)
 
+    @staticmethod
+    def required_buffer(box: Box, f: float, psi_max: float) -> float:
+        """The buffer the drawn window must have for a given field: a galaxy sits up
+        to half a cell diagonal from its cell's centre and moves by up to
+        `f |Psi_cell|` along the line of sight, so no galaxy from a cell outside
+        `[r_lo, r_hi]` can land in the shell iff `buffer >= sqrt(3)/2 dx + f max|Psi|`
+        over the drawn cells. Checked at field time by `sample_shell`."""
+        return 0.5 * np.sqrt(3.0) * box.dx + abs(float(f)) * float(psi_max)
+
     def check_box(self, box: Box):
         """The buffered shell must fit inside the box centred on the observer, and
         the buffer must exceed a cell diagonal (so every cell that can feed the shell
@@ -186,9 +195,24 @@ class ShellStats:
     ic_seed: int = 0
     draw_seed: int = 0
     f: float = 0.0
+    psi_max: float = 0.0  # max |Psi| over the drawn (window) cells, Mpc/h
+    required_buffer: float = 0.0  # Shell.required_buffer for this field
 
     def realized_nbar(self, fsky: float) -> float:
         return self.n_kept / (fsky * self.shell.volume)
+
+
+def _max_psi_in_window(psi_flat, W, box: Box) -> float:
+    """`max |Psi|` over cells with `W` set, slab by slab (no full-grid temporary)."""
+    n = box.n_mesh
+    best = 0.0
+    for i in range(n):
+        w = W[i].reshape(-1)
+        if not w.any():
+            continue
+        p = psi_flat[i * n * n : (i + 1) * n * n][w]
+        best = max(best, float(np.sqrt(np.einsum("ij,ij->i", p, p).max())))
+    return best
 
 
 def radial_histogram(r, edges):
@@ -261,8 +285,18 @@ def sample_shell(
         draw_seed=int(draw_seed),
         f=float(f),
     )
-    del W
     psi = fields.psi_flat("xyz") if rsd else None
+    stats.psi_max = _max_psi_in_window(psi, W, box) if rsd else 0.0
+    stats.required_buffer = shell.required_buffer(box, f, stats.psi_max)
+    del W
+    if shell.buffer < stats.required_buffer:
+        raise ValueError(
+            f"radial buffer {shell.buffer:g} Mpc/h is below the "
+            f"{stats.required_buffer:.1f} this field needs (sqrt(3)/2 dx = "
+            f"{0.5 * np.sqrt(3.0) * box.dx:.1f} + f max|Psi| = "
+            f"{abs(f) * stats.psi_max:.1f}); galaxies outside the window could "
+            f"reach the shell [{shell.rmin:g}, {shell.rmax:g}]"
+        )
     half = 0.5 * box.box_size
     jitter_p = fields.jitter_p
     edges = stats.r_edges
