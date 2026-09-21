@@ -31,7 +31,7 @@ def test_placement_inverts_to_counts_and_stays_in_box(p):
     box = Box(6, 12.0)
     rng = np.random.default_rng(5)
     counts = rng.poisson(2.0, size=box.shape)
-    xyz, cell = sample.place(counts, box, np.random.default_rng(6), jitter_p=p)
+    xyz, cell = sample.place(counts, box, 6, jitter_p=p)
     assert xyz.shape == (counts.sum(), 3) and cell.shape == (counts.sum(),)
     assert np.all(xyz >= 0) and np.all(xyz < box.box_size)
     i, j, k = sample._decode_cells(cell, box.n_mesh)
@@ -44,19 +44,59 @@ def test_placement_inverts_to_counts_and_stays_in_box(p):
         assert np.array_equal(np.floor(xyz / box.dx).astype(int).T, np.array([i, j, k]))
 
 
-@pytest.mark.parametrize("chunk", [1, 7, 36, None])
-def test_chunked_placement_is_bit_identical(chunk):
+def test_slab_streams_are_deterministic_distinct_and_local():
+    # The same (seed, slab) gives the same numbers; different slabs and different
+    # seeds give different numbers; a slab's placement does not move when another
+    # slab's counts change (each slab is its own stream).
+    a = sample.slab_rng(8, 3).random(4)
+    assert np.array_equal(a, sample.slab_rng(8, 3).random(4))
+    assert not np.array_equal(a, sample.slab_rng(8, 4).random(4))
+    assert not np.array_equal(a, sample.slab_rng(9, 3).random(4))
     box = Box(6, 12.0)
     counts = np.random.default_rng(7).poisson(1.5, size=box.shape)
-    ref, ref_cell = sample.place(counts, box, np.random.default_rng(8), jitter_p=2)
-    parts = list(
-        sample.place_chunked(
-            counts, box, np.random.default_rng(8), jitter_p=2, chunk_cells=chunk
-        )
-    )
-    xyz = np.concatenate([p[0] for p in parts])
-    cell = np.concatenate([p[1] for p in parts])
-    assert np.array_equal(xyz, ref) and np.array_equal(cell, ref_cell)
+    ref, ref_cell = sample.place(counts, box, 8, jitter_p=2)
+    other = counts.copy()
+    other[0] = 0  # empty the first slab
+    other[2] += 3
+    xyz, cell = sample.place(other, box, 8, jitter_p=2)
+    for i in (1, 3, 4, 5):  # untouched slabs: identical galaxies
+        assert np.array_equal(xyz[cell // 36 == i], ref[ref_cell // 36 == i])
+    assert not np.any(cell // 36 == 0)
+
+
+@pytest.mark.parametrize("p", [1, 2])
+def test_place_slab_order_one_matches_the_general_path(p):
+    # jitter_p == 1 draws (n, 3) directly; the general path draws (n, 3, p) and sums.
+    # For p == 1 the two must be bitwise the same numbers.
+    box = Box(4, 8.0)
+    counts = np.random.default_rng(3).poisson(2.0, size=(box.n_mesh, box.n_mesh))
+    xyz, cell = sample.place_slab(counts, 1, box, sample.slab_rng(5, 1), jitter_p=p)
+    rng = sample.slab_rng(5, 1)
+    n = counts.sum()
+    u = rng.random((n, 3, p)).sum(axis=2) - 0.5 * (p - 1)
+    i, j, k = sample._decode_cells(cell, box.n_mesh)
+    ref = (u + np.stack([i, j, k], 1)) * box.dx
+    if p > 1:
+        ref = np.mod(ref, box.box_size)
+    assert np.array_equal(xyz, ref)
+    assert np.all(i == 1)
+
+
+def test_draw_slabs_matches_slabwise_poisson_then_place():
+    # The slab stream is used in a fixed order: Poisson over the slab, then uniforms.
+    box = Box(6, 12.0)
+    lam = np.random.default_rng(2).random(box.shape) * 3.0
+    got = list(sample.draw_slabs(lam, box, 11))
+    ref = []
+    for i in range(box.n_mesh):
+        rng = sample.slab_rng(11, i)
+        counts = rng.poisson(lam[i])
+        xyz, cell = sample.place_slab(counts, i, box, rng)
+        if xyz.shape[0]:
+            ref.append((xyz, cell))
+    assert len(got) == len(ref)
+    for (a, ca), (b, cb) in zip(got, ref):
+        assert np.array_equal(a, b) and np.array_equal(ca, cb)
 
 
 def test_poisson_total_matches_expectation():

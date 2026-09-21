@@ -32,7 +32,7 @@ class RunConfig:
     grid_scale: float = 1.0
     radial_buffer: float = suite.RADIAL_BUFFER
     jitter_p: int = 1
-    chunk_cells: int | None = None
+    n_workers: int | None = None  # threads for the shell sampler; None = core count
     row_group_rows: int = 2**20
     n_radial_bins: int = 8
 
@@ -54,6 +54,8 @@ class RunConfig:
             raise ValueError("jitter_p must be >= 1")
         if self.row_group_rows < 1:
             raise ValueError("row_group_rows must be >= 1")
+        if self.n_workers is not None and self.n_workers < 1:
+            raise ValueError("n_workers must be >= 1 or null")
 
     # ---------------------------------------------------------------- effective bins
     def effective_bin(self, b: suite.Bin) -> suite.Bin:
@@ -98,7 +100,7 @@ class RunConfig:
             "grid_scale": self.grid_scale,
             "radial_buffer": self.radial_buffer,
             "jitter_p": self.jitter_p,
-            "chunk_cells": self.chunk_cells,
+            "n_workers": self.n_workers,
             "row_group_rows": self.row_group_rows,
             "n_radial_bins": self.n_radial_bins,
             "bins": [asdict(b) for b in self.bins],
@@ -108,7 +110,7 @@ class RunConfig:
     def hash_dict(self) -> dict:
         """What the config hash covers: everything but names and machine paths."""
         d = self.to_dict()
-        for k in ("run_name", "output_dir", "pk_dir", "mask", "chunk_cells"):
+        for k in ("run_name", "output_dir", "pk_dir", "mask", "n_workers"):
             d.pop(k)
         d["mask"] = self.mask_path is not None
         return d
@@ -131,7 +133,7 @@ class RunConfig:
             "grid_scale",
             "radial_buffer",
             "jitter_p",
-            "chunk_cells",
+            "n_workers",
             "row_group_rows",
             "n_radial_bins",
             "bins",

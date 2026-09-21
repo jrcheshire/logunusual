@@ -69,7 +69,7 @@ def _live_bytes():
     return sum(int(a.nbytes) for a in jax.live_arrays())
 
 
-def _global_metadata(cfg: RunConfig, mask, bins):
+def _global_metadata(cfg: RunConfig, mask, bins, n_workers: int):
     import jax
 
     meta = {
@@ -91,6 +91,8 @@ def _global_metadata(cfg: RunConfig, mask, bins):
         "radial_buffer": cfg.radial_buffer,
         "jitter_p": cfg.jitter_p,
         "rsd": "radial",
+        "rng_scheme": sample.RNG_SCHEME,
+        "n_workers": n_workers,
         "velocity_assignment": "own-cell",
         "frame": "observer at origin; each bin its own periodic box centred there",
         "shell_edges": "inclusive",
@@ -131,6 +133,8 @@ def generate_realization(
         else AngularMask.from_h5(cfg.mask_path, cfg.mask_dataset)
     )
     fsky = 1.0 if mask is None else mask.fsky
+    n_workers = cfg.n_workers or sample.default_workers()
+    log(f"run {cfg.run_name}: {len(todo)} bin(s), {n_workers} sampler thread(s)")
     t_start = time.perf_counter()
     summary = {
         "realization": realization,
@@ -141,7 +145,9 @@ def generate_realization(
     }
     peak_live = 0
     with io.CatalogWriter(
-        out, _global_metadata(cfg, mask, todo), row_group_rows=cfg.row_group_rows
+        out,
+        _global_metadata(cfg, mask, todo, n_workers),
+        row_group_rows=cfg.row_group_rows,
     ) as writer:
         for b in todo:
             e = cfg.effective_bin(b)
@@ -179,7 +185,7 @@ def generate_realization(
                 e.nbar,
                 draw,
                 f=b.f,
-                chunk_cells=cfg.chunk_cells,
+                n_workers=n_workers,
                 n_radial_bins=cfg.n_radial_bins,
             ):
                 writer.write(kept, b.index)

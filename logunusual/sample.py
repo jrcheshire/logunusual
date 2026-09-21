@@ -2,19 +2,41 @@
 
 Per cell: `lambda = nbar V_cell (1 + delta_g)` (>= 0 by construction of the field; a
 negative cell is a bug and is reported, never silently clipped), counts
-`rng.poisson(lambda)` in one vectorised call, positions `cell corner + (u_1 + ... +
-u_p - (p-1)/2) dx` per axis (order-`p` jitter; `p = 1` is uniform within the cell),
-plane-parallel RSD `s_z = z + f Psi_z(cell)` with the galaxy's OWN cell displacement,
-then periodic wrap. Placement is streamed over slabs of cells; the draw order is
-galaxy-major, so any chunking reproduces the in-memory result bit for bit (empty
-chunks consume no random numbers). Pattern copied from disco-mocks `catalog.py`.
+`rng.poisson(lambda)`, positions `cell corner + (u_1 + ... + u_p - (p-1)/2) dx` per
+axis (order-`p` jitter; `p = 1` is uniform within the cell), plane-parallel RSD
+`s_z = z + f Psi_z(cell)` with the galaxy's OWN cell displacement, then periodic wrap.
+
+RNG scheme (one scheme for every sampler in the package): the work unit is one x-slab
+(`i` fixed, `N^2` cells) and each slab has its own counter-based stream,
+`slab_rng(draw_seed, i)` = `Philox(key=draw_seed, counter=i)`. Within a slab the order
+is the Poisson draw over the slab's cells, then the placement uniforms galaxy-major.
+A catalog therefore depends on `(draw_seed, field)` alone: not on how many slabs are
+processed at once, in which order, or by how many threads. Empty slabs consume no
+random numbers, and a slab's draws do not move when another slab's window changes.
 """
 
 from dataclasses import dataclass
+import os
 
 import numpy as np
 
 from .grid import Box
+
+RNG_SCHEME = "philox-per-x-slab"  # recorded in the catalog metadata
+
+
+def default_workers() -> int:
+    """Cores this process may run on (the affinity mask where the OS has one)."""
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def slab_rng(draw_seed: int, slab: int) -> np.random.Generator:
+    """The stream of x-slab `slab` for `draw_seed`: Philox keyed by the seed, counter
+    set to the slab index, so streams are independent across slabs and the same
+    across processes, platforms and thread counts."""
+    return np.random.Generator(np.random.Philox(key=int(draw_seed), counter=int(slab)))
 
 
 def intensity(delta_g, nbar: float, box: Box):
@@ -42,48 +64,73 @@ def _decode_cells(flat_cell, n):
     return i, j, k
 
 
-def place_chunked(
-    counts, box: Box, rng: np.random.Generator, *, jitter_p=1, chunk_cells=None
-):
-    """Yield `(xyz, flat_cell)` per slab: positions float64 in [0, L) and the C-order
-    flat index of each galaxy's cell. `chunk_cells` defaults to one x-slab (N^2)."""
+def place_slab(counts_slab, i: int, box: Box, rng: np.random.Generator, jitter_p=1):
+    """Positions for x-slab `i` from its per-cell `counts_slab` (`N^2` entries, any
+    shape) using `rng` (the slab's stream): `(xyz, flat_cell)` with `xyz` float64 in
+    `[0, L)` and `flat_cell` the C-order index into the full grid. Galaxy-major draw
+    order; `jitter_p == 1` draws the uniforms directly (same numbers as the order-1
+    sum, no length-1 reduction)."""
+    n = box.n_mesh
+    sub = np.asarray(counts_slab).reshape(-1)
+    if sub.size != n * n:
+        raise ValueError(f"a slab holds {n * n} cells, got {sub.size}")
+    occ = np.flatnonzero(sub)
+    if occ.size == 0:
+        return np.empty((0, 3)), np.empty(0, dtype=np.int64)
+    local = np.repeat(occ, sub[occ]).astype(np.int64, copy=False)
+    ng = local.size
+    if jitter_p == 1:
+        xyz = rng.random((ng, 3), dtype=np.float64)
+    else:
+        u = rng.random((ng, 3, jitter_p), dtype=np.float64)
+        xyz = u.sum(axis=2) - 0.5 * (jitter_p - 1)  # jitter centred on the cell
+        del u
+    xyz[:, 0] += i
+    xyz[:, 1] += local // n
+    xyz[:, 2] += local % n
+    xyz *= box.dx
+    if jitter_p > 1:
+        np.mod(xyz, box.box_size, out=xyz)
+    return xyz, local + i * n * n
+
+
+def place_slabs(counts, box: Box, draw_seed: int, *, jitter_p=1):
+    """Yield `(xyz, flat_cell)` per non-empty x-slab of a given `counts` grid, each
+    slab placed with its own stream (the Poisson draw is not part of this call, so
+    the placement uniforms are the FIRST numbers of each slab's stream)."""
     n = box.n_mesh
     counts = np.asarray(counts).reshape(-1)
     if counts.size != box.n_cells:
         raise ValueError("counts must have one entry per cell")
-    if chunk_cells is None:
-        chunk_cells = n * n
-    dx = box.dx
-    L = box.box_size
-    offset = 0.5 * (jitter_p - 1)  # so the jitter is centred on the cell for any p
-    for c0 in range(0, counts.size, chunk_cells):
-        sub = counts[c0 : c0 + chunk_cells]
-        occ = np.flatnonzero(sub)
-        if occ.size == 0:
+    for i in range(n):
+        sub = counts[i * n * n : (i + 1) * n * n]
+        if not sub.any():
             continue
-        flat_cell = np.repeat(occ + c0, sub[occ])
-        ng = flat_cell.size
-        u = rng.random((ng, 3, jitter_p), dtype=np.float64)
-        xyz = u.sum(axis=2) - offset
-        del u
-        i, j, k = _decode_cells(flat_cell, n)
-        xyz[:, 0] += i
-        xyz[:, 1] += j
-        xyz[:, 2] += k
-        xyz *= dx
-        if jitter_p > 1:
-            np.mod(xyz, L, out=xyz)
-        yield xyz, flat_cell
+        yield place_slab(sub, i, box, slab_rng(draw_seed, i), jitter_p)
 
 
-def place(counts, box: Box, rng: np.random.Generator, *, jitter_p=1, chunk_cells=None):
-    """In-memory placement: concatenation of `place_chunked` (bit-identical)."""
-    parts = list(
-        place_chunked(counts, box, rng, jitter_p=jitter_p, chunk_cells=chunk_cells)
-    )
+def place(counts, box: Box, draw_seed: int, *, jitter_p=1):
+    """In-memory placement: concatenation of `place_slabs`."""
+    parts = list(place_slabs(counts, box, draw_seed, jitter_p=jitter_p))
     if not parts:
         return np.empty((0, 3)), np.empty(0, dtype=np.int64)
     return np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
+
+
+def draw_slab(lam, i: int, box: Box, draw_seed: int, jitter_p=1):
+    """Poisson-draw and place x-slab `i` of the intensity grid `lam` on the slab's
+    stream: `(xyz, flat_cell)`. The unit every sampler in the package is built from."""
+    rng = slab_rng(draw_seed, i)
+    counts = rng.poisson(np.asarray(lam[i], dtype=np.float64))
+    return place_slab(counts, i, box, rng, jitter_p)
+
+
+def draw_slabs(lam, box: Box, draw_seed: int, *, jitter_p=1):
+    """`draw_slab` over every x-slab, in order, skipping slabs with no galaxies."""
+    for i in range(box.n_mesh):
+        xyz, flat_cell = draw_slab(lam, i, box, draw_seed, jitter_p)
+        if xyz.shape[0]:
+            yield xyz, flat_cell
 
 
 def rsd_plane_parallel(xyz, flat_cell, psi_z_flat, f: float, box: Box):
@@ -118,34 +165,26 @@ class Catalog:
 
 
 def sample_catalog(
-    fields,
-    nbar: float,
-    draw_seed: int,
-    *,
-    f: float = 0.0,
-    rsd: bool = True,
-    chunk_cells=None,
+    fields, nbar: float, draw_seed: int, *, f: float = 0.0, rsd: bool = True
 ) -> Catalog:
-    """Draw one catalog from `fields` (a `field.Fields`). `rsd` needs `fields.psi_z`."""
+    """Draw one periodic-box catalog from `fields` (a `field.Fields`), serially over
+    slabs (this sampler serves the gates; the shell product is the parallel one).
+    `rsd` needs `fields.psi_z`."""
     box = fields.box
     lam, clip_fraction, clipped_mass = intensity(fields.delta_g, nbar, box)
-    rng = np.random.default_rng(draw_seed)
-    counts = poisson_counts(lam, rng)
     lam_total = float(lam.sum())
-    del lam
     if rsd:
         if fields.psi_z is None:
             raise ValueError("rsd=True but the fields carry no displacement")
         psi_flat = np.asarray(fields.psi_z, dtype=np.float64).reshape(-1)
     parts = []
     cells = []
-    for xyz, flat_cell in place_chunked(
-        counts, box, rng, jitter_p=fields.jitter_p, chunk_cells=chunk_cells
-    ):
+    for xyz, flat_cell in draw_slabs(lam, box, draw_seed, jitter_p=fields.jitter_p):
         if rsd:
             rsd_plane_parallel(xyz, flat_cell, psi_flat, f, box)
         parts.append(xyz)
         cells.append(flat_cell)
+    del lam
     xyz = np.concatenate(parts) if parts else np.empty((0, 3))
     cell = np.concatenate(cells) if cells else np.empty(0, dtype=np.int64)
     return Catalog(

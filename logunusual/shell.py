@@ -191,6 +191,41 @@ class ShellStats:
         return self.n_kept / (fsky * self.shell.volume)
 
 
+def radial_histogram(r, edges):
+    """Counts of `r` per bin of the UNIFORM `edges` (as `np.histogram(r, edges)`,
+    including its edge corrections; values at `edges[-1]` fall in the last bin) via
+    `bincount`, without the sort `np.histogram` does."""
+    nb = edges.size - 1
+    lo, hi = edges[0], edges[-1]
+    idx = ((r - lo) * (nb / (hi - lo))).astype(np.int64)
+    idx = np.clip(idx, 0, nb - 1)
+    # round-off against the actual edges, as np.histogram does
+    idx -= r < edges[idx]
+    idx += (r >= edges[idx + 1]) & (idx != nb - 1)
+    return np.bincount(idx, minlength=nb).astype(np.int64)
+
+
+def _ordered_map(fn, items, n_workers: int):
+    """`map(fn, items)` on a thread pool, results yielded in input order with at most
+    `2 * n_workers` items in flight; inline when `n_workers <= 1`."""
+    if n_workers <= 1:
+        for x in items:
+            yield fn(x)
+        return
+    from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
+
+    items = iter(items)
+    with ThreadPoolExecutor(max_workers=n_workers) as ex:
+        pending = deque()
+        for x in items:
+            pending.append(ex.submit(fn, x))
+            if len(pending) >= 2 * n_workers:
+                yield pending.popleft().result()
+        while pending:
+            yield pending.popleft().result()
+
+
 def sample_shell(
     fields,
     shell: Shell,
@@ -200,14 +235,14 @@ def sample_shell(
     *,
     f: float,
     rsd: bool = True,
-    chunk_cells=None,
+    n_workers: int | None = None,
     n_radial_bins: int = 8,
 ):
     """Generator over x-slabs of the box: yields `(xyz_kept, stats)` with `stats` the
     running `ShellStats` (the same object each time; final after exhaustion). Positions
-    are observer-centred, in redshift space if `rsd`. The draw order and RNG use are
-    those of `sample.place_chunked` on the windowed intensity, so any chunking is
-    bit-identical."""
+    are observer-centred, in redshift space if `rsd`. Each slab is drawn on its own
+    stream (`sample.slab_rng`) by `n_workers` threads (default: the core count) and
+    the slabs are yielded in order, so the catalog is the same for any thread count."""
     box = fields.box
     shell.check_box(box)
     lam, clip, _ = sample.intensity(fields.delta_g, nbar, box)
@@ -215,8 +250,6 @@ def sample_shell(
         raise ValueError("negative intensity cells: not a lognormal field")
     W = cell_window(box, shell)
     lam *= W
-    rng = np.random.default_rng(draw_seed)
-    counts = sample.poisson_counts(lam, rng)
     stats = ShellStats(
         shell=shell,
         nbar_target=float(nbar),
@@ -228,20 +261,32 @@ def sample_shell(
         draw_seed=int(draw_seed),
         f=float(f),
     )
-    del lam, W
+    del W
     psi = fields.psi_flat("xyz") if rsd else None
     half = 0.5 * box.box_size
-    for xyz, flat_cell in sample.place_chunked(
-        counts, box, rng, jitter_p=fields.jitter_p, chunk_cells=chunk_cells
-    ):
-        stats.n_drawn += xyz.shape[0]
+    jitter_p = fields.jitter_p
+    edges = stats.r_edges
+    if n_workers is None:
+        n_workers = sample.default_workers()
+
+    def work(i):
+        xyz, flat_cell = sample.draw_slab(lam, i, box, draw_seed, jitter_p)
+        n_drawn = xyz.shape[0]
+        left = 0
         xyz -= half
         if rsd:
             rsd_radial(xyz, flat_cell, psi, f)
-            stats.n_left_box += int(np.count_nonzero(np.abs(xyz).max(axis=1) >= half))
-        keep = select(xyz, shell, mask)
+            left = int(np.count_nonzero(np.abs(xyz).max(axis=1) >= half))
+        r = np.sqrt(np.einsum("ij,ij->i", xyz, xyz))
+        keep = (r >= shell.rmin) & (r <= shell.rmax)
+        if mask is not None:
+            keep &= mask.contains(xyz)
         kept = xyz[keep]
+        return kept, n_drawn, left, radial_histogram(r[keep], edges)
+
+    for kept, n_drawn, left, hist in _ordered_map(work, range(box.n_mesh), n_workers):
+        stats.n_drawn += n_drawn
+        stats.n_left_box += left
         stats.n_kept += kept.shape[0]
-        r = np.sqrt(np.einsum("ij,ij->i", kept, kept))
-        stats.r_hist += np.histogram(r, bins=stats.r_edges)[0]
+        stats.r_hist += hist
         yield kept, stats

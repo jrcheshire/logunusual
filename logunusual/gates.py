@@ -134,9 +134,8 @@ def gate_uniform_shot(box: Box, box_est: Box, nbar, seeds, *, jitter_p=1):
     ratios = []
     lam = np.full(box.shape, nbar * box.v_cell)
     for s in seeds:
-        rng = np.random.default_rng(s)
-        counts = sample.poisson_counts(lam, rng)
-        xyz, _ = sample.place(counts, box, rng, jitter_p=jitter_p)
+        parts = [p[0] for p in sample.draw_slabs(lam, box, s, jitter_p=jitter_p)]
+        xyz = np.concatenate(parts)
         res = validate.power_multipoles(
             validate.delta_k_from_positions(xyz, box_est), box_est
         )

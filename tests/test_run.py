@@ -173,10 +173,13 @@ def test_uniform_input_gives_poisson_counts_through_the_driver(tmp_path):
 
 
 def test_two_processes_write_the_same_bytes(tmp_path):
+    # Two fresh processes, one sampler thread against four: same catalog.
     cfg, _ = _cfg(tmp_path)
-    (tmp_path / "c.yaml").write_text(cfg.to_yaml())
     outs = []
-    for tag in ("a", "b"):
+    for tag, workers in (("a", 1), ("b", 4)):
+        c = RunConfig(**{**cfg.__dict__, "n_workers": workers})
+        assert c.config_hash == cfg.config_hash  # threads are not part of the mock
+        (tmp_path / f"c_{tag}.yaml").write_text(c.to_yaml())
         subprocess.run(
             [
                 sys.executable,
@@ -184,7 +187,7 @@ def test_two_processes_write_the_same_bytes(tmp_path):
                 "logunusual.cli",
                 "run",
                 "--config",
-                str(tmp_path / "c.yaml"),
+                str(tmp_path / f"c_{tag}.yaml"),
                 "--realizations",
                 "0",
                 "--output-dir",

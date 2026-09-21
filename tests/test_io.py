@@ -14,6 +14,7 @@ META = {
     "bins": "1,2,3",
     "nbar_overdensity_factor": 1.0,
     "rsd": "radial",
+    "rng_scheme": "philox-per-x-slab",
     "jitter_p": 1,
     "radial_buffer": 20.0,
 }

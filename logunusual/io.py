@@ -40,6 +40,7 @@ REQUIRED_KEYS = (
     "bins",
     "nbar_overdensity_factor",
     "rsd",
+    "rng_scheme",
     "jitter_p",
     "radial_buffer",
 )

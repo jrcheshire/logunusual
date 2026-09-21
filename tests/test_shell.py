@@ -253,23 +253,44 @@ def test_sample_shell_uniform_field_is_poisson_in_the_shell(spectrum, mask):
     assert np.all(np.abs(zs) < 4.0), zs
 
 
-@pytest.mark.parametrize("chunk", [1, 37, None])
-def test_sample_shell_chunking_is_bit_identical(spectrum, mask, chunk):
+@pytest.mark.parametrize("workers", [3, 8, None])
+def test_sample_shell_is_the_same_for_any_thread_count(spectrum, mask, workers):
     box = Box(16, 160.0)
     s = shell.Shell(20.0, 50.0, 20.0)
     F = field.generate_fields(spectrum, 1.5, box, 21, psi_axes="xyz")
 
-    def run(c):
+    def run(w):
         parts = []
-        for kept, st in shell.sample_shell(F, s, mask, 5e-3, 22, f=0.8, chunk_cells=c):
+        for kept, st in shell.sample_shell(F, s, mask, 5e-3, 22, f=0.8, n_workers=w):
             parts.append(kept)
         return np.concatenate(parts), st
 
-    a, sa = run(chunk)
-    b, sb = run(None)
+    a, sa = run(workers)
+    b, sb = run(1)  # inline, no executor
     assert np.array_equal(a, b)
-    assert (sa.n_drawn, sa.n_kept) == (sb.n_drawn, sb.n_kept)
+    assert (sa.n_drawn, sa.n_kept, sa.n_left_box) == (
+        sb.n_drawn,
+        sb.n_kept,
+        sb.n_left_box,
+    )
     assert np.array_equal(sa.r_hist, sb.r_hist)
+    assert sa.n_kept > 0
+
+
+def test_radial_histogram_matches_numpy_including_edges():
+    edges = np.linspace(20.0, 50.0, 9)
+    rng = np.random.default_rng(4)
+    r = np.concatenate(
+        [
+            rng.uniform(20.0, 50.0, 100_000),
+            edges,  # every edge exactly, including both ends
+            np.nextafter(edges[1:-1], 0.0),  # just below each interior edge
+            np.nextafter(edges[1:-1], np.inf),  # just above
+            20.0 + 30.0 * np.arange(1, 8) / 8,  # the edges as a different expression
+        ]
+    )
+    assert np.array_equal(shell.radial_histogram(r, edges), np.histogram(r, edges)[0])
+    assert shell.radial_histogram(np.empty(0), edges).sum() == 0
 
 
 def test_sample_shell_real_space_and_redshift_space_share_the_draw(spectrum):
