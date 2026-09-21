@@ -15,5 +15,6 @@ grid_scale: 1.0             # multiplies every bin's N_grid (smoke runs)
 radial_buffer: 150.0        # Mpc/h drawn beyond the shell on both sides
 jitter_p: 1                 # uniform-in-cell placement (the validated construction)
 n_workers: null             # sampler threads, one x-slab per task (null: core count)
+angular_precut: true        # draw only cells whose galaxies can land in the mask
 row_group_rows: 1048576     # parquet row-group pin (2^20)
 n_radial_bins: 8            # sub-shells of the density-profile diagnostic

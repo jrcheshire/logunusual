@@ -310,6 +310,91 @@ def test_buffer_guard_uses_the_field_and_trips_on_a_large_displacement(spectrum)
     assert st.psi_max == 0.0 and st.required_buffer == 0.5 * np.sqrt(3.0) * box.dx
 
 
+def test_mask_dilation_is_the_centre_distance_set():
+    import healpy as hp
+
+    nside = 16
+    for seed_pix in (0, 1000, 2500):
+        v = np.zeros(hp.nside2npix(nside), bool)
+        v[seed_pix] = True
+        m = shell.AngularMask(v, nested=True)
+        for radius in (0.05, 0.2, 0.6):
+            got = m.dilated(radius).values
+            centre = np.array(hp.pix2vec(nside, seed_pix, nest=True))
+            allv = np.column_stack(hp.pix2vec(nside, np.arange(v.size), nest=True))
+            ang = np.arccos(np.clip(allv @ centre, -1.0, 1.0))
+            assert np.array_equal(got, ang <= radius + 1e-12)
+    m = shell.AngularMask(np.zeros(12, bool), nested=False)
+    assert not m.dilated(0.3).values.any()
+    assert m.dilated(np.pi).values.all()
+    full = shell.AngularMask(np.ones(12, bool), nested=False)
+    assert full.dilated(0.1).values.all()
+
+
+def _sparse_mask(nside=16):
+    import healpy as hp
+
+    v = np.zeros(hp.nside2npix(nside), bool)
+    v[np.arange(0, v.size, 97)] = True  # isolated pixels all over the sky
+    v[300:320] = True  # and one small patch
+    return shell.AngularMask(v, nested=True)
+
+
+@pytest.mark.parametrize("which", ["band", "sparse"])
+def test_angular_precut_is_an_exact_superset_of_the_feeding_cells(
+    spectrum, mask, which
+):
+    # Every galaxy that survives the radial + mask selection (drawn from the FULL
+    # radial window, RSD applied) comes from a cell the pre-cut keeps; and the pre-cut
+    # keeps fewer cells than the radial window when the mask does not cover the sky.
+    m = mask if which == "band" else _sparse_mask()
+    box = Box(16, 160.0)
+    s = shell.Shell(20.0, 40.0, 35.0)
+    W = shell.cell_window(box, s)
+    P = shell.angular_precut(box, s, m)
+    assert not np.any(P & ~W)  # a subset of the radial window
+    assert P.sum() < W.sum()
+    assert np.array_equal(shell.angular_precut(box, s, None), W)
+    f = 0.8
+    for seed in (51, 52, 53, 54):
+        F = field.generate_fields(spectrum, 1.5, box, seed, psi_axes="xyz")
+        lam, _, _ = sample.intensity(F.delta_g, 2e-2, box)
+        lam *= W
+        psi = F.psi_flat("xyz")
+        fed = np.zeros(box.n_cells, bool)
+        n_kept = 0
+        for xyz, cell in sample.draw_slabs(lam, box, 100 + seed):
+            xyz -= 0.5 * box.box_size
+            shell.rsd_radial(xyz, cell, psi, f)
+            keep = shell.select(xyz, s, m)
+            fed[cell[keep]] = True
+            n_kept += keep.sum()
+        assert n_kept > 0
+        assert np.all(P.reshape(-1)[fed]), "a kept galaxy came from a cut cell"
+    # and the two samplers agree on what is kept, galaxy for galaxy: with the pre-cut
+    # the cut cells draw nothing and every other slab is on the same stream
+    F = field.generate_fields(spectrum, 1.5, box, 51, psi_axes="xyz")
+
+    def run(pre):
+        out = [
+            k
+            for k, _ in shell.sample_shell(
+                F, s, m, 2e-2, 151, f=f, n_workers=1, angular_precut=pre
+            )
+        ]
+        return np.concatenate(out)
+
+    a, b = run(True), run(False)
+    # different draws inside the slabs that lost cells, so compare as SETS is not
+    # possible; what must agree exactly is the count of feeding cells' contribution:
+    # kept galaxies of slabs with no cut cell are identical
+    cut_slabs = np.flatnonzero((W & ~P).reshape(box.n_mesh, -1).any(axis=1))
+    sa = np.floor((a[:, 0] + 0.5 * box.box_size) / box.dx).astype(int)
+    sb = np.floor((b[:, 0] + 0.5 * box.box_size) / box.dx).astype(int)
+    same = ~np.isin(np.arange(box.n_mesh), cut_slabs)
+    assert np.array_equal(a[same[sa]], b[same[sb]])
+
+
 def test_radial_histogram_matches_numpy_including_edges():
     edges = np.linspace(20.0, 50.0, 9)
     rng = np.random.default_rng(4)

@@ -15,6 +15,7 @@ both directions under RSD without a density deficit at the edge.
 """
 
 from dataclasses import dataclass
+from functools import cached_property
 import hashlib
 from pathlib import Path
 
@@ -91,6 +92,64 @@ def cell_window(box: Box, shell: Shell):
     return (r >= shell.r_lo) & (r <= shell.r_hi)
 
 
+def cell_angular_radius(box: Box, r_centre):
+    """Largest angle between a cell's centre direction and any point of the cell:
+    `asin(min(1, (sqrt(3)/2 dx) / r_centre))`; `pi` for a cell containing or nearer
+    than half a diagonal to the observer."""
+    half = 0.5 * np.sqrt(3.0) * box.dx
+    r = np.asarray(r_centre, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(r > 0.0, half / r, np.inf)
+    return np.where(ratio >= 1.0, np.pi, np.arcsin(np.minimum(ratio, 1.0)))
+
+
+def slab_radius(box: Box, i: int):
+    """`|x_centre|` of x-slab `i`, shape (N, N)."""
+    c = cell_centres_1d(box)
+    return np.sqrt(c[i] ** 2 + c[:, None] ** 2 + c[None, :] ** 2)
+
+
+def slab_window(box: Box, shell: Shell, mask, i: int, angular: bool = True):
+    """Boolean (N, N): the cells of x-slab `i` to draw. Radial: centre within the
+    buffered shell. Angular (with a mask and `angular`): radial RSD keeps a galaxy's
+    direction, so a galaxy of cell `c` stays within `cell_angular_radius(r_c)` of the
+    cell-centre direction and its pixel's centre within a further pixel radius of
+    that; the cell is dropped iff the nearest set-pixel centre is farther than
+    `cell_angular_radius(r_c) + 2 max_pixrad` from its centre's pixel centre
+    (`AngularMask.distance_to_set`). An exact superset of the cells that feed the
+    masked shell; `tests/test_shell.py` checks it galaxy by galaxy. Returns
+    `(window, n_radial)` with `n_radial` the radial-only cell count."""
+    import healpy as hp
+
+    r = slab_radius(box, i)
+    W = (r >= shell.r_lo) & (r <= shell.r_hi)
+    n_radial = int(np.count_nonzero(W))
+    if mask is None or not angular or n_radial == 0:
+        return W, n_radial
+    idx = np.flatnonzero(W)
+    n = box.n_mesh
+    c = cell_centres_1d(box)
+    pix = hp.vec2pix(
+        mask.nside, np.full(idx.size, c[i]), c[idx // n], c[idx % n], nest=mask.nested
+    )
+    theta = cell_angular_radius(box, r.reshape(-1)[idx]) + 2.0 * hp.max_pixrad(
+        mask.nside
+    )
+    W.reshape(-1)[idx] = mask.distance_to_set[pix] <= theta
+    return W, n_radial
+
+
+def angular_precut(box: Box, shell: Shell, mask):
+    """Boolean (N, N, N): `slab_window` stacked over slabs (the drawn cells with a
+    mask; `mask=None` gives the radial window)."""
+    return np.stack(
+        [slab_window(box, shell, mask, i)[0] for i in range(box.n_mesh)], axis=0
+    )
+
+
+_precut = slab_window  # `sample_shell` takes a flag named `angular_precut`
+
+
 @dataclass(frozen=True)
 class AngularMask:
     """A HEALPix map of kept pixels (bool), any NSIDE, NESTED or RING."""
@@ -148,6 +207,32 @@ class AngularMask:
             dataset=dataset,
         )
 
+    @cached_property
+    def distance_to_set(self) -> np.ndarray:
+        """Per pixel, the angle (radians) from its centre to the nearest SET pixel's
+        centre (0 on set pixels; `pi` everywhere if nothing is set). One KD-tree on
+        the unit vectors; `dilated(theta)` is `distance_to_set <= theta`."""
+        import healpy as hp
+        from scipy.spatial import cKDTree
+
+        d = np.zeros(self.values.size)
+        on = np.flatnonzero(self.values)
+        off = np.flatnonzero(~self.values)
+        if on.size == 0:
+            d[:] = np.pi
+            return d
+        if off.size:
+            vec_on = np.column_stack(hp.pix2vec(self.nside, on, nest=self.nested))
+            vec_off = np.column_stack(hp.pix2vec(self.nside, off, nest=self.nested))
+            chord, _ = cKDTree(vec_on).query(vec_off, k=1)
+            d[off] = 2.0 * np.arcsin(np.minimum(0.5 * chord, 1.0))
+        return d
+
+    def dilated(self, radius: float) -> "AngularMask":
+        """The mask grown by `radius` (radians) on pixel CENTRES: set iff the centre
+        is within `radius` of a set pixel's centre."""
+        return AngularMask(self.distance_to_set <= radius + 1e-12, self.nested)
+
     def contains(self, xyz):
         """Boolean per row of `xyz` (observer-centred): the pixel of the direction is
         set. Rows at the origin are assigned to whatever pixel healpy returns for the
@@ -185,8 +270,9 @@ class ShellStats:
 
     shell: Shell
     nbar_target: float
-    n_window_cells: int
-    lam_window: float  # sum of lambda over the window = expected draws
+    n_window_cells: int  # cells drawn (radial window, cut by the angular pre-cut)
+    lam_window: float  # sum of lambda over the drawn cells = expected draws
+    n_window_cells_radial: int = 0  # cells of the radial window alone
     n_drawn: int = 0
     n_kept: int = 0
     n_left_box: int = 0  # shifted outside [-L/2, L/2) (diagnostic; never kept)
@@ -202,12 +288,13 @@ class ShellStats:
         return self.n_kept / (fsky * self.shell.volume)
 
 
-def _max_psi_in_window(psi_flat, W, box: Box) -> float:
-    """`max |Psi|` over cells with `W` set, slab by slab (no full-grid temporary)."""
+def _max_psi_in_window(psi_flat, box: Box, shell: Shell) -> float:
+    """`max |Psi|` over the cells of the radial window, slab by slab (no full-grid
+    temporary)."""
     n = box.n_mesh
     best = 0.0
     for i in range(n):
-        w = W[i].reshape(-1)
+        w = slab_window(box, shell, None, i)[0].reshape(-1)
         if not w.any():
             continue
         p = psi_flat[i * n * n : (i + 1) * n * n][w]
@@ -261,24 +348,25 @@ def sample_shell(
     rsd: bool = True,
     n_workers: int | None = None,
     n_radial_bins: int = 8,
+    angular_precut: bool = True,
 ):
     """Generator over x-slabs of the box: yields `(xyz_kept, stats)` with `stats` the
     running `ShellStats` (the same object each time; final after exhaustion). Positions
     are observer-centred, in redshift space if `rsd`. Each slab is drawn on its own
     stream (`sample.slab_rng`) by `n_workers` threads (default: the core count) and
-    the slabs are yielded in order, so the catalog is the same for any thread count."""
+    the slabs are yielded in order, so the catalog is the same for any thread count.
+    Each worker builds its own slab's window (radial, and the angular pre-cut with a
+    mask); `n_window_cells` / `lam_window` are complete only after exhaustion."""
     box = fields.box
     shell.check_box(box)
     lam, clip, _ = sample.intensity(fields.delta_g, nbar, box)
     if clip:
         raise ValueError("negative intensity cells: not a lognormal field")
-    W = cell_window(box, shell)
-    lam *= W
     stats = ShellStats(
         shell=shell,
         nbar_target=float(nbar),
-        n_window_cells=int(np.count_nonzero(W)),
-        lam_window=float(lam.sum()),
+        n_window_cells=0,
+        lam_window=0.0,
         r_edges=np.linspace(shell.rmin, shell.rmax, n_radial_bins + 1),
         r_hist=np.zeros(n_radial_bins, dtype=np.int64),
         ic_seed=int(fields.ic_seed),
@@ -286,9 +374,8 @@ def sample_shell(
         f=float(f),
     )
     psi = fields.psi_flat("xyz") if rsd else None
-    stats.psi_max = _max_psi_in_window(psi, W, box) if rsd else 0.0
+    stats.psi_max = _max_psi_in_window(psi, box, shell) if rsd else 0.0
     stats.required_buffer = shell.required_buffer(box, f, stats.psi_max)
-    del W
     if shell.buffer < stats.required_buffer:
         raise ValueError(
             f"radial buffer {shell.buffer:g} Mpc/h is below the "
@@ -303,8 +390,16 @@ def sample_shell(
     if n_workers is None:
         n_workers = sample.default_workers()
 
+    if mask is not None and angular_precut:
+        mask.distance_to_set  # build once, before the threads share it
+
     def work(i):
-        xyz, flat_cell = sample.draw_slab(lam, i, box, draw_seed, jitter_p)
+        W, n_radial = _precut(box, shell, mask, i, angular_precut)
+        lam_i = lam[i] * W
+        win = (int(np.count_nonzero(W)), n_radial, float(lam_i.sum()))
+        rng = sample.slab_rng(draw_seed, i)
+        counts = rng.poisson(lam_i)
+        xyz, flat_cell = sample.place_slab(counts, i, box, rng, jitter_p)
         n_drawn = xyz.shape[0]
         left = 0
         xyz -= half
@@ -316,9 +411,14 @@ def sample_shell(
         if mask is not None:
             keep &= mask.contains(xyz)
         kept = xyz[keep]
-        return kept, n_drawn, left, radial_histogram(r[keep], edges)
+        return kept, n_drawn, left, radial_histogram(r[keep], edges), win
 
-    for kept, n_drawn, left, hist in _ordered_map(work, range(box.n_mesh), n_workers):
+    for kept, n_drawn, left, hist, win in _ordered_map(
+        work, range(box.n_mesh), n_workers
+    ):
+        stats.n_window_cells += win[0]
+        stats.n_window_cells_radial += win[1]
+        stats.lam_window += win[2]
         stats.n_drawn += n_drawn
         stats.n_left_box += left
         stats.n_kept += kept.shape[0]

@@ -93,6 +93,7 @@ def _global_metadata(cfg: RunConfig, mask, bins, n_workers: int):
         "rsd": "radial",
         "rng_scheme": sample.RNG_SCHEME,
         "n_workers": n_workers,
+        "angular_precut": cfg.angular_precut,
         "velocity_assignment": "own-cell",
         "frame": "observer at origin; each bin its own periodic box centred there",
         "shell_edges": "inclusive",
@@ -186,6 +187,7 @@ def generate_realization(
                 draw,
                 f=b.f,
                 n_workers=n_workers,
+                angular_precut=cfg.angular_precut,
                 n_radial_bins=cfg.n_radial_bins,
             ):
                 writer.write(kept, b.index)
@@ -218,6 +220,7 @@ def generate_realization(
                 "n_left_box": stats.n_left_box,
                 "lam_window": stats.lam_window,
                 "n_window_cells": stats.n_window_cells,
+                "n_window_cells_radial": stats.n_window_cells_radial,
                 "radial_buffer": shell.buffer,
                 "psi_max": stats.psi_max,
                 "required_buffer": stats.required_buffer,

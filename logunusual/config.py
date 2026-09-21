@@ -33,6 +33,7 @@ class RunConfig:
     radial_buffer: float = suite.RADIAL_BUFFER
     jitter_p: int = 1
     n_workers: int | None = None  # threads for the shell sampler; None = core count
+    angular_precut: bool = True  # draw only cells that can feed the masked shell
     row_group_rows: int = 2**20
     n_radial_bins: int = 8
 
@@ -101,6 +102,7 @@ class RunConfig:
             "radial_buffer": self.radial_buffer,
             "jitter_p": self.jitter_p,
             "n_workers": self.n_workers,
+            "angular_precut": self.angular_precut,
             "row_group_rows": self.row_group_rows,
             "n_radial_bins": self.n_radial_bins,
             "bins": [asdict(b) for b in self.bins],
@@ -134,6 +136,7 @@ class RunConfig:
             "radial_buffer",
             "jitter_p",
             "n_workers",
+            "angular_precut",
             "row_group_rows",
             "n_radial_bins",
             "bins",
