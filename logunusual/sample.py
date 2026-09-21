@@ -8,7 +8,7 @@ axis (order-`p` jitter; `p = 1` is uniform within the cell), plane-parallel RSD
 
 RNG scheme (one scheme for every sampler in the package): the work unit is one x-slab
 (`i` fixed, `N^2` cells) and each slab has its own counter-based stream,
-`slab_rng(draw_seed, i)` = `Philox(key=draw_seed, counter=i)`. Within a slab the order
+`slab_rng(draw_seed, i)` = `Philox(key = draw_seed | i << 64)`. Within a slab the order
 is the Poisson draw over the slab's cells, then the placement uniforms galaxy-major.
 A catalog therefore depends on `(draw_seed, field)` alone: not on how many slabs are
 processed at once, in which order, or by how many threads. Empty slabs consume no
@@ -33,10 +33,14 @@ def default_workers() -> int:
 
 
 def slab_rng(draw_seed: int, slab: int) -> np.random.Generator:
-    """The stream of x-slab `slab` for `draw_seed`: Philox keyed by the seed, counter
-    set to the slab index, so streams are independent across slabs and the same
-    across processes, platforms and thread counts."""
-    return np.random.Generator(np.random.Philox(key=int(draw_seed), counter=int(slab)))
+    """The stream of x-slab `slab` for `draw_seed`: Philox with the 128-bit KEY
+    `draw_seed | slab << 64`, so every (seed, slab) is a distinct stream. The key is
+    the stream identifier; the counter is only a position within one stream, and two
+    generators that differ in `counter` alone emit the SAME numbers shifted by a few
+    blocks (the bug G10 caught on 2026-09-20)."""
+    if not 0 <= int(draw_seed) < 2**64 or not 0 <= int(slab) < 2**64:
+        raise ValueError("draw_seed and slab must be in [0, 2^64)")
+    return np.random.Generator(np.random.Philox(key=int(draw_seed) | int(slab) << 64))
 
 
 def intensity(delta_g, nbar: float, box: Box):

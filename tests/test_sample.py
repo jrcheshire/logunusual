@@ -48,10 +48,13 @@ def test_slab_streams_are_deterministic_distinct_and_local():
     # The same (seed, slab) gives the same numbers; different slabs and different
     # seeds give different numbers; a slab's placement does not move when another
     # slab's counts change (each slab is its own stream).
-    a = sample.slab_rng(8, 3).random(4)
-    assert np.array_equal(a, sample.slab_rng(8, 3).random(4))
-    assert not np.array_equal(a, sample.slab_rng(8, 4).random(4))
-    assert not np.array_equal(a, sample.slab_rng(9, 3).random(4))
+    a = sample.slab_rng(8, 3).random(64)
+    assert np.array_equal(a, sample.slab_rng(8, 3).random(64))
+    # streams of neighbouring slabs (and of neighbouring seeds) share NO values: a
+    # Philox that differed only in its counter would emit the same numbers shifted
+    # by a block, which correlates adjacent slabs (caught by G10, 2026-09-20)
+    for other in (sample.slab_rng(8, 4), sample.slab_rng(8, 2), sample.slab_rng(9, 3)):
+        assert not np.intersect1d(a, other.random(256)).size
     box = Box(6, 12.0)
     counts = np.random.default_rng(7).poisson(1.5, size=box.shape)
     ref, ref_cell = sample.place(counts, box, 8, jitter_p=2)
