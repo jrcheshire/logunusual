@@ -225,9 +225,10 @@ because galaxies cross them in both directions (G10).
 - Memory: JAX arrays are invisible to tracemalloc and `memory_stats()` is None on CPU;
   `scripts/m1_memory.py` polls `jax.live_arrays()` (misses XLA scratch, says so). On a
   device that HAS an allocator, the scratch it misses is 50-60% on top: measured
-  2026-09-15 on deneb's RTX 3050, the field stage's allocator peak is 12.1 x N^3 float64
-  at 192^3 and 256^3 and 11.3x at 384^3, against 7.5x live. **The allocator peak decides
-  whether a grid fits; the live count does not.** `scripts/m3_device.py` reports both.
+  2026-09-15/16 on deneb's RTX 3050 and a Vista GH200, the field stage's allocator peak
+  is **12.0 x N^3 float64 at every production grid** (192^3 to 512^3; 12.03 GiB at
+  512^3), against 7.5x live. **The allocator peak decides whether a grid fits; the live
+  count does not.** `scripts/m3_device.py` reports both.
   The poller is also a sampling instrument with ~10% run-to-run spread, so it cannot
   settle a percent-level question on its own.
 - Where the time went in the Julia reference (bin 5, 512^3, laptop): field 8 s, draw
@@ -235,7 +236,10 @@ because galaxies cross them in both directions (G10).
   (2026-09-04, laptop CPU, full-density seven-bin realization): 187 s wall for all
   seven bins, 19.3 GB host RSS, 7.0 x N^3 float64 live JAX bytes per bin; bin 5 is
   8 s field + 31 s sample. The sample stage is 80% of the wall (M3's target), and the
-  full-sky buffered window draws 2.4x the kept galaxies.
+  full-sky buffered window draws 2.4x the kept galaxies. The same realization on a
+  Vista GH200 node (2026-09-17, 72 cores): 259 s, sample ~214 s, under one core busy
+  on average -- the sample stage is SERIAL numpy, and a GPU node loses to the laptop
+  on it; the GPU field stage gains only ~1.2x at 512^3 (`ROADMAP.md` M3).
 
 ## Working rules (project)
 
@@ -267,8 +271,12 @@ because galaxies cross them in both directions (G10).
   Direction recorded 2026-09-04: this is a lognormal mock code, not a survey code; the
   v28 table and a mask are default inputs; no other repository is touched or used as
   a gate.
-- **Next: M3 performance and memory** (512^3 bins on the laptop, CUDA on deneb, ULP
-  record, jit with bitwise-before-jit). Open a fresh plan-mode session against
-  `ROADMAP.md` M3.
+- **M3 performance and memory, measurement pass DONE (2026-09-15 to 09-17):** deneb
+  RTX 3050 (6 GB, holds 3 of 7 bins; correctness box only), Vista GH200 (all bins fit,
+  12.0 x N^3 f64 allocator peak, field stage ~1.2x the laptop, full realization 259 s
+  vs 187 s), CPU-vs-CUDA ULPs ~1e-13 relative, not bitwise. Tables in `ROADMAP.md` M3.
+  **Still owed:** the pkG time split; the sample stage (serial; angular pre-cut, then
+  parallel per-cell sampling); float32 dtype knob in `field.py`; jit with
+  bitwise-before-jit.
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.

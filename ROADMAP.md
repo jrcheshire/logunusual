@@ -194,9 +194,62 @@ ulp, p99 400-4000, max |diff| 4e-15 to 1.6e-13 on fields of rms 0.18-3.8, i.e. ~
 relative. **Not bitwise.** The max-ulp figures (up to 1.9e9) are an artefact of the
 metric at zero crossings and should not be quoted.
 
-**Still owed by M3:** `jax.jit` of the field stage with a bitwise-before-jit check, the
-TACC GPU leg, and the sample stage (80% of the laptop wall) -- none of which this pass
-touched.
+### Measured on a TACC Vista GH200 node, 2026-09-16/17 (jobs 999776 / 1002399, commits `cb2fdf1` / `b04ddf5`)
+
+GH200 120GB (97871 MiB reported; JAX allocator limit 71.25 GiB), partition `gh`, one
+node. Job 999776 ran `scripts/m3_device.py ladder` / `wall` / `ulp` over all seven bins;
+job 1002399 (`scripts/m3_vista_b.sbatch`) ran one full seven-bin realization. Logs
+`logunusual-m3-vista-999776.log`, `logunusual-m3-vista-b-1002399.log`; JSON under
+`runs/m3/vista_*.json`, `runs/m3/vista_b_1002399_summary.json`.
+
+**Every bin fits, and the allocator peak is 12.0 x N^3 float64 at every size:**
+
+| bin | N | device allocator peak | x N^3 f64 | field stage, unblocked | laptop M4 Max |
+|---|---|---|---|---|---|
+| bin01 | 192 | 0.64 GiB | 12.09 | 0.36 s | 0.43 s |
+| bin02 | 256 | 1.51 GiB | 12.07 | 0.83 s | |
+| bin03 | 384 | 5.08 GiB | 12.04 | 2.71 s | |
+| bin04 | 448 | 8.06 GiB | 12.04 | 4.29 s | |
+| bin05 | 512 | 12.03 GiB | 12.03 | 6.34 s | ~8 s |
+| bin06 / bin07 | 512 | 12.03 GiB | 12.03 | 6.37 / 6.39 s | |
+
+deneb's 11.27x at 384^3 was the outlier, not the trend. **The field stage gains only
+~1.2x over the laptop at 512^3.** Its block-serialised breakdown (7.95 s total):
+white_noise 0.68, pkG_g 3.30, delta_g 0.29, pkG_m 2.61, psi_x/y/z 0.47/0.28/0.25. The
+two P(k) -> P_G conversions are ~75% of the stage; their internal split (host spline
+`target_on_grid`, upload, FFTs, `float()` syncs) is NOT measured, so no cause is named.
+
+**CPU vs CUDA (`runs/m3/vista_ulp.json`, N = 64/128/256):** median 6-20 ulp (120 on
+delta_m at 64^3), max |diff| 4e-15 to 1.2e-13. Same picture as deneb; not bitwise.
+
+**Full seven-bin realization (job 1002399, 72 affinity cores, `OMP_NUM_THREADS=72`):**
+651,427,904 galaxies, 15.04 GiB, realized/target 0.9988-1.0077 per bin, identical in
+count and size to the laptop's acceptance run (ROADMAP M2). Wall **259 s against the
+laptop's 187 s.**
+
+| bin | N | field | sample | drawn / kept |
+|---|---|---|---|---|
+| bin01 | 192 | 5.3 s | 14.1 s | 2.8x |
+| bin02 | 256 | 3.9 s | 40.6 s | 2.3x |
+| bin03 | 384 | 7.2 s | 34.8 s | 2.4x |
+| bin04 | 448 | 6.1 s | 41.5 s | 2.5x |
+| bin05 | 512 | 8.2 s | 43.1 s | 2.6x |
+| bin06 | 512 | 6.3 s | 29.9 s | 1.9x |
+| bin07 | 512 | 6.3 s | 10.4 s | 2.1x |
+
+The sample stage is ~214 s of the 259. Bash `time` gives 4m48 real against 4m07 user
+with 72 threads available, i.e. **under one core busy on average: the sample stage runs
+serially, and the thread count bought nothing.** The 259 vs 187 s gap is therefore a
+single-core Grace vs M4 Max comparison, and the GPU node loses it. Two levers follow,
+both measured rather than guessed: the angular pre-cut at cell level (the buffered
+full-sky window draws 2.4x the galaxies kept, on every machine), and parallelising the
+per-cell Poisson sampling across cells (the only change that lets a many-core node win).
+The field stage on the GPU (3.9-8.2 s per bin, in-run) matches the standalone `wall`
+numbers above.
+
+**Still owed by M3:** the pkG time split; the sample stage (pre-cut, then parallel
+sampling); a real float32 dtype knob in `field.py` with `probe_field_arrays` retired;
+`jax.jit` of the field stage with a bitwise-before-jit check.
 
 ## M4 -- Physics upgrades (each opens its own plan session)
 
