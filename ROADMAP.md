@@ -106,8 +106,9 @@ the window vs `sum(lambda)`; chunk invariance (bit-identical positions, byte-ide
 files); layout self-check, metadata round trip, empty bin; two processes -> identical
 bytes (asserted on Linux, characterised on macOS); CLI dry-run writes nothing.
 
-**Slow gates (128^3, L = 1000, dx = 7.8, bin-5 b and f, nbar 3e-3; the shell is bin
-5 scaled by 1/5: [386.4, 457.5] +- 30, mask an equatorial band fsky 0.70):**
+**Slow gates (128^3, L = 1000, dx = 7.8, bin-5 b and f, nbar 3e-3; the shell was bin
+5 scaled by 1/5, [386.4, 457.5] +- 30, mask an equatorial band fsky 0.70; since
+2026-09-20 the shell is [300, 371.1] +- 90, see the note under the table):**
 
 | gate | statistic | band | result (2026-09-04, M4 laptop) |
 |---|---|---|---|
@@ -116,6 +117,16 @@ bytes (asserted on Linux, characterised on macOS); CLI dry-run writes nothing.
 | G10 | draws over the window vs `sum lambda` | 16 seeds | z mean +0.03, std 0.98; 3 galaxies left the box (all beyond rmax + buffer, never kept) |
 | G11 | 1x mesh: `(P0 - shot) / (b^2 P_in x response)` | k < k_Nyq/2, 64 seeds on the 32-seed bands of G5 | max |z| 2.0; SE 0.2-0.5% (with bands re-derived per seed count, 32/48/64 seeds all left one band at 0.68-0.74% SE: the lognormal scatter is super-Gaussian, so `band_seeds` fixes the bands and the seeds bring the SE down) |
 | G11 | 1x mesh: vs the fixed-field prediction | k < k_Nyq/2, 64 seeds | max |z| 2.5; SE 0.08-0.11% (|z| up to 43 before the sign fix) |
+
+**G10 re-run, 2026-09-20 (per-slab streams, buffer guard, angular pre-cut; shell
+[300, 371.1] +- 90).** The M3 buffer guard (`Shell.required_buffer` = half diagonal
++ `f max|Psi|` over the drawn cells) measured 40-68 Mpc/h across 16 seeds at this
+grid, so the 30 Mpc/h the scaled production buffer gave was not sufficient, and only
+42.5 fit between `rmax` and `L/2`: the shell moved inward with the same thickness and
+a 90 Mpc/h buffer. Results: total 1.0085 +- 0.0063 (z +1.35); profile max |z| 2.3
+(two adjacent outer sub-shells at 1.024 and 1.016, the same realizations in both);
+draws z mean -0.03, std 1.20; nothing left the box. The 2026-09-04 rows above stand as
+measured under the old geometry; nothing in them is re-asserted.
 
 **Finding (G11).** M1's coherent-alias formula omitted the sign `(-1)^(r n)` that the
 half-cell offset of the cell centres puts on alias image `n` of a mesh with ratio `r`.
@@ -238,17 +249,67 @@ laptop's 187 s.**
 | bin07 | 512 | 6.3 s | 10.4 s | 2.1x |
 
 The sample stage is ~214 s of the 259. Bash `time` gives 4m48 real against 4m07 user
-with 72 threads available, i.e. **under one core busy on average: the sample stage runs
+with 72 threads available, i.e. **under one core busy on average: the sample stage ran
 serially, and the thread count bought nothing.** The 259 vs 187 s gap is therefore a
-single-core Grace vs M4 Max comparison, and the GPU node loses it. Two levers follow,
-both measured rather than guessed: the angular pre-cut at cell level (the buffered
-full-sky window draws 2.4x the galaxies kept, on every machine), and parallelising the
-per-cell Poisson sampling across cells (the only change that lets a many-core node win).
-The field stage on the GPU (3.9-8.2 s per bin, in-run) matches the standalone `wall`
-numbers above.
+single-core Grace vs M4 Max comparison, and the GPU node loses it. The field stage on
+the GPU (3.9-8.2 s per bin, in-run) matches the standalone `wall` numbers above.
 
-**Still owed by M3:** the pkG time split; the sample stage (pre-cut, then parallel
-sampling); a real float32 dtype knob in `field.py` with `probe_field_arrays` retired;
+### The sample stage, rebuilt (2026-09-20, laptop M4 Max, 16 cores)
+
+Measured on bin 2 (256^3, survey mask, 133M kept), one realization, no parquet write:
+
+| sample stage | wall | drawn |
+|---|---|---|
+| M2 code, serial (one stream, `np.histogram`, whole-grid counts) | 22.7 s | 311M |
+| per-slab streams, 1 thread | 19.8 s | 311M |
+| per-slab streams, 8 threads | 3.2 s | 311M |
+| per-slab streams, 16 threads | 2.4 s | 311M |
+| + angular pre-cut, 16 threads | 2.1 s | 230M |
+
+The M2 profile (cProfile, 22.7 s): placement 5.4, `rsd_radial` 4.9, `select` 3.9 (of
+which `vec2pix` 2.7), `np.histogram` 2.9 (its sort), cell decode 1.1. numpy and healpy
+release the GIL in every one of these, so the stage is thread-parallel once each slab
+has its own RNG stream.
+
+**RNG scheme.** One x-slab is the work unit; its stream is
+`Philox(key = draw_seed | slab << 64)`, Poisson over the slab's cells then placement
+uniforms galaxy-major (`sample.slab_rng`, `draw_slab`). A catalog depends on
+`(draw_seed, field)` alone: bitwise the same for any thread count (test) and across
+processes (test, on Linux). Every seed's catalog changed relative to M2. **The first
+version keyed the stream by the seed and set `counter = slab`; Philox's counter is a
+position within ONE stream, so adjacent slabs emitted the same numbers shifted by a
+block. Every fast test passed; G10's draw-count Poisson z came out with std 9.4 per
+realization. The slab index belongs in the 128-bit key; G10 now gives std 1.07-1.20.**
+
+**Buffer guard.** `Shell.required_buffer(box, f, psi_max) = sqrt(3)/2 dx + f max|Psi|`
+over the drawn cells, checked at field time; `sample_shell` raises below it and
+records `psi_max` / `required_buffer` per bin. The guard found the M2 test fixtures
+short (20 Mpc/h against 25-31 needed at 16^3; G10's 30 against 40-68 at 128^3) and
+measured the production case: bin 2, seed 0, `max|Psi|` over the window 154 Mpc/h
+(`psi_rms` 5.2; the lognormal matter field's tail, growing with the cell count: 25 at
+16^3, 45 at 64^3, 70-90 at 128^3), so 113 Mpc/h of the 150 buffer is needed; bin 7
+needs ~42. The production default stays 150 (JC, 2026-09-20); shrinking it would buy
+1.66 -> 1.56x of shell volume on bin 2 and 1.48 -> 1.14x on bin 7, not more.
+
+**Angular pre-cut.** Radial RSD preserves direction, so a cell is dropped iff the
+nearest set-pixel centre is farther than `cell_angular_radius(r_c) + 2 max_pixrad`
+from its centre's pixel (`AngularMask.distance_to_set`, one KD-tree per mask). Exact
+superset of the feeding cells, checked galaxy by galaxy (band and sparse masks). With
+the survey mask (fsky 0.713) the drawn cells are 0.73-0.75 of the radial window at
+every bin, draws 311M -> 230M on bin 2 (drawn/kept 2.33 -> 1.72), and the windows are
+built per slab inside the workers, so no N^3 window array exists.
+
+**Full suite under the new scheme (2026-09-20, `pixi run test`, 4:41): 85 passed, 1
+failed -- G4a's lowest band (k = 0.035) has SE 0.69% against the 0.67% floor with 32
+seeds (ratio 1.009 +- 0.007, z +1.3; every band |z| < 2.1; every other band's SE
+inside the floor).** Same mechanism as G11 in M2: bands are sized so a Gaussian
+scatter sits AT the floor, so a new draw can land a hair above it. Nothing loosened;
+the gate is as it was and its treatment (G11's `band_seeds` fix, or more seeds) is a
+gate-design decision, not made here.
+
+**Still owed by M3:** the seven-bin re-measurement on the laptop (against 187 s /
+15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s); the pkG time
+split; a real float32 dtype knob in `field.py` with `probe_field_arrays` retired;
 `jax.jit` of the field stage with a bitwise-before-jit check.
 
 ## M4 -- Physics upgrades (each opens its own plan session)

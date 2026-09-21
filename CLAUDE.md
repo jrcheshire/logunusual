@@ -77,11 +77,14 @@ pixi run lint                # flake8, max-line 88, ignore E203
   lognormal galaxy and matter fields -> displacement components (`psi_axes`, any
   subset of "xyz"; `Fields.psi` dict, `psi_flat`). `generate_fields` is the entry
   point; `trace=` hook for memory instrumentation.
-- `sample.py` **[M1]** -- numpy: intensity, Poisson counts, streamed uniform-in-cell
-  placement (chunking is bit-invariant), own-cell plane-parallel RSD, `split_seed`.
-- `shell.py` **[M2]** -- `Shell` (rmin, rmax, buffer; `check_box`), observer-centred
-  `cell_window`, `AngularMask` (HEALPix h5, NESTED or RING, any NSIDE), `select`,
-  `rsd_radial`, and the streamed `sample_shell` generator with `ShellStats`.
+- `sample.py` **[M1, M3]** -- numpy: intensity, per-slab RNG streams (`slab_rng`,
+  `draw_slab`: Poisson then uniform-in-cell placement on one x-slab's own stream),
+  own-cell plane-parallel RSD, `split_seed`, `default_workers`.
+- `shell.py` **[M2, M3]** -- `Shell` (rmin, rmax, buffer; `check_box`,
+  `required_buffer`), observer-centred `cell_window` / `slab_window` (radial window
+  and the angular pre-cut per slab), `AngularMask` (HEALPix h5, NESTED or RING, any
+  NSIDE; `distance_to_set`), `select`, `rsd_radial`, `radial_histogram`, and the
+  threaded `sample_shell` generator with `ShellStats`.
 - `io.py` **[M2]** -- the catalog format: `CatalogWriter` (pinned row groups, bins
   ascending, atomic rename), `read_metadata`, `bin_metadata`, `check_layout`,
   `read_bin`.
@@ -119,9 +122,11 @@ Grid `N^3`, box `L`, `dx = L/N`, `V_cell = dx^3`; cell centres at `(i + 0.5) dx`
    Estimator normalisation `V/N^6 |delta_k|^2` (disco-mocks convention).
 4. **Lognormal** `1 + delta = exp(G) / mean_box(exp G)`, both fields; `1 + delta >= 0`
    by construction, no clipping anywhere downstream.
-5. **Sampling** `lambda = nbar V_cell (1 + delta_g)`, `rng.poisson`, positions
-   **uniform within the cell** (`jitter_p = 1`), streamed over slabs in galaxy-major
-   draw order (any chunking is bit-identical). Seeds: `split_seed(seed) -> (ic, draw)`
+5. **Sampling** `lambda = nbar V_cell (1 + delta_g)`, per x-slab on the slab's own
+   stream `Philox(key = draw_seed | slab << 64)`: `rng.poisson` over the slab's cells,
+   then positions **uniform within the cell** (`jitter_p = 1`) galaxy-major. A catalog
+   depends on `(draw_seed, field)` alone, so slabs run on a thread pool and the result
+   is bitwise the same for any thread count. Seeds: `split_seed(seed) -> (ic, draw)`
    via `SeedSequence.spawn`.
 6. **Velocities** `Psi_k = i k / k^2 delta_m,k` (linearised continuity on the MATTER
    lognormal field, Agrawal et al. 2017), DC 0, Mpc/h; each galaxy gets its OWN cell's
@@ -162,9 +167,19 @@ kept iff `rmin <= |s| <= rmax` (inclusive) and, with a mask, the HEALPix pixel o
 is set (`hp.vec2pix`). No periodic wrap after the shift (a galaxy can only leave the box
 from a buffer cell touching a face and is outside the shell either way; the count is
 reported). The buffer must exceed a cell diagonal and `rmax + buffer <= L/2`
-(`Shell.check_box`). Consequences: `N_kept ~ Poisson(nbar fsky V_shell)` exactly for a
-uniform field (the fast gate), and the radial profile is flat through both edges
-because galaxies cross them in both directions (G10).
+(`Shell.check_box`, config time) AND, for the realized field, `sqrt(3)/2 dx +
+f max|Psi|` over the drawn cells (`Shell.required_buffer`; `sample_shell` raises
+below it and records `psi_max` / `required_buffer` per bin). The production 150 Mpc/h
+covers bin 2's ~113-128 (the lognormal displacement tail: `max|Psi|` 150-175 Mpc/h
+at 256^3 against `psi_rms` 5); test fixtures with 20 Mpc/h were short and were
+resized (2026-09-20). With a mask, the **angular pre-cut** (`slab_window`) drops the
+cells whose galaxies cannot land in a set pixel: radial RSD keeps direction, so the
+test is `AngularMask.distance_to_set` at the cell centre's pixel against
+`cell_angular_radius(r_c) + 2 max_pixrad` -- an exact superset of the feeding cells
+(gate in `tests/test_shell.py`), 0.73-0.75 of the radial window at fsky 0.713.
+Consequences: `N_kept ~ Poisson(nbar fsky V_shell)` exactly for a uniform field (the
+fast gate), and the radial profile is flat through both edges because galaxies cross
+them in both directions (G10).
 
 ## Catalog format (the package's own spec; `io.py`)
 
@@ -182,11 +197,13 @@ because galaxies cross them in both directions (G10).
   clip, so the file stamps `nbar_overdensity_factor = 1.0`.
 - Metadata (file-level, string-valued): global keys (`generator`, `generator_version`,
   `created`, `host`, `machine`, `jax_backend`, `config_hash`, `seed_base`, scales,
-  `radial_buffer`, `jitter_p`, `rsd`, mask name/sha256/nside/ordering/fsky or
-  `mask = none`, `bins`) and per-bin keys `bin{index:02d}.*` (shell, box, grid, `b`,
-  `f`, `nbar_target`, `realized_nbar` = `n_kept / (fsky V_shell)`, `n_galaxies`,
-  `n_drawn`, `n_left_box`, seeds, `pk_file`, `pk_sha256`, `sigma2_*`, `xi_min_galaxy`,
-  `clipped_power_fraction`, `psi_rms`, timings, peak live JAX bytes).
+  `radial_buffer`, `jitter_p`, `rsd`, `rng_scheme`, `n_workers`, `angular_precut`,
+  mask name/sha256/nside/ordering/fsky or `mask = none`, `bins`) and per-bin keys
+  `bin{index:02d}.*` (shell, box, grid, `b`, `f`, `nbar_target`, `realized_nbar` =
+  `n_kept / (fsky V_shell)`, `n_galaxies`, `n_drawn`, `n_left_box`, `n_window_cells`
+  and `_radial`, `lam_window`, `psi_max`, `required_buffer`, seeds, `pk_file`,
+  `pk_sha256`, `sigma2_*`, `xi_min_galaxy`, `clipped_power_fraction`, `psi_rms`,
+  timings, peak live JAX bytes).
 - Written as `catalog.parq.tmp` and renamed on close: a file with the final name is
   complete.
 
@@ -218,10 +235,17 @@ because galaxies cross them in both directions (G10).
   k = 0.035 and 0.965 at k = 0.19, and P2/P0 exceeds Kaiser by 25% at k = 0.19. The
   Kaiser gate therefore lives in a scaled-amplitude control arm (`P_in x 1e-2`) and the
   production-amplitude curves are MEASUREMENTS reported by the gate script.
-- Reproducibility: numpy RNG + numpy sampler are deterministic; the JAX field stage is
-  eager (no jit). Bitwise across processes is asserted on Linux (CI) and characterised
-  on macOS (umbrella memory: XLA CPU on macOS-arm64 can wobble in the last bit).
-  Measured 2026-09-04 on the M4 laptop: identical bytes at 32^3 and 64^3.
+- Reproducibility: numpy RNG + numpy sampler are deterministic and, with one Philox
+  stream per x-slab, independent of the thread count BY CONSTRUCTION (a test asserts
+  it); the JAX field stage is eager (no jit). Bitwise across processes is asserted on
+  Linux (CI) and characterised on macOS (umbrella memory: XLA CPU on macOS-arm64 can
+  wobble in the last bit). Measured 2026-09-04 on the M4 laptop: identical bytes at
+  32^3 and 64^3; 2026-09-20 `scripts/m1_reproducibility.py --n 64` IDENTICAL.
+- **Philox `counter` is a position, not a stream id.** Streams that differ only in
+  `counter` emit the same numbers shifted by a block; the slab index goes into the
+  128-bit `key`. The counter version passed every fast test and failed G10's
+  draw-count Poisson check at 9 sigma (2026-09-20). A distinctness test must check
+  that two streams share NO values.
 - Memory: JAX arrays are invisible to tracemalloc and `memory_stats()` is None on CPU;
   `scripts/m1_memory.py` polls `jax.live_arrays()` (misses XLA scratch, says so). On a
   device that HAS an allocator, the scratch it misses is 50-60% on top: measured
@@ -238,8 +262,11 @@ because galaxies cross them in both directions (G10).
   8 s field + 31 s sample. The sample stage is 80% of the wall (M3's target), and the
   full-sky buffered window draws 2.4x the kept galaxies. The same realization on a
   Vista GH200 node (2026-09-17, 72 cores): 259 s, sample ~214 s, under one core busy
-  on average -- the sample stage is SERIAL numpy, and a GPU node loses to the laptop
-  on it; the GPU field stage gains only ~1.2x at 512^3 (`ROADMAP.md` M3).
+  on average -- the sample stage WAS serial numpy, and a GPU node lost to the laptop
+  on it; the GPU field stage gains only ~1.2x at 512^3 (`ROADMAP.md` M3). Rebuilt
+  2026-09-20: per-slab streams on a thread pool + angular pre-cut take bin 2's sample
+  stage from 22.7 s to 2.1 s on the laptop's 16 cores (19.8 s on one thread; draws
+  311M -> 230M). Seven-bin re-measurement (laptop, Vista) still owed.
 
 ## Working rules (project)
 
@@ -275,8 +302,12 @@ because galaxies cross them in both directions (G10).
   RTX 3050 (6 GB, holds 3 of 7 bins; correctness box only), Vista GH200 (all bins fit,
   12.0 x N^3 f64 allocator peak, field stage ~1.2x the laptop, full realization 259 s
   vs 187 s), CPU-vs-CUDA ULPs ~1e-13 relative, not bitwise. Tables in `ROADMAP.md` M3.
-  **Still owed:** the pkG time split; the sample stage (serial; angular pre-cut, then
-  parallel per-cell sampling); float32 dtype knob in `field.py`; jit with
-  bitwise-before-jit.
+- **M3 sample stage DONE (2026-09-20):** per-slab Philox streams (catalog independent
+  of thread count by construction; every seed's catalog changed vs M2), threaded
+  `sample_shell`, field-time buffer guard, angular pre-cut. Bin 2 sample stage 22.7 s
+  -> 2.1 s on 16 cores. G3-G11 re-run under the new scheme: all pass except G4a's
+  lowest band, SE 0.69% vs the 0.67% floor (mean fine; `ROADMAP.md` M3).
+  **Still owed:** seven-bin re-measurement on the laptop and Vista; the pkG time
+  split; float32 dtype knob in `field.py`; jit with bitwise-before-jit.
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.

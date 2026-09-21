@@ -1,15 +1,17 @@
 # logunusual
 
-Lognormal galaxy mock generator: JAX for the field stage (CPU or CUDA), vectorised
-per-cell galaxy sampling, streamed parquet output. A run is a list of bins, each a
+Lognormal galaxy mock generator: JAX for the field stage (CPU or CUDA), threaded
+per-slab galaxy sampling (numpy, one RNG stream per slab so the catalog does not
+depend on the thread count), streamed parquet output. A run is a list of bins, each a
 periodic box centred on the observer holding one radial shell; galaxies are drawn in
 the buffered shell, displaced radially by their cell's velocity, cut to the shell and
 an optional angular HEALPix mask, and written as one parquet per realization. The
 default bin table is a seven-shell survey forecast (`logunusual/suite.py`); any table
 with the same fields can be given in the run config.
 
-Status: **M2 shell product** (spectrum -> lognormal fields -> Poisson shell catalog
-with radial RSD and mask -> parquet). See `ROADMAP.md` for milestones and gates and
+Status: **M3 performance** (M2's spectrum -> lognormal fields -> Poisson shell
+catalog with radial RSD and mask -> parquet, with the sample stage threaded and the
+drawn region cut to what can feed the masked shell). See `ROADMAP.md` for milestones and gates and
 `CLAUDE.md` for the construction and the catalog format.
 
 ## Install
@@ -35,8 +37,13 @@ pixi run logunusual check runs/<run_name>/realization_00000/catalog.parq
 `configs/v28_default.yaml` is the annotated example. Inputs: one two-column P(k) TSV
 per bin (`k [h/Mpc]`, `P [(Mpc/h)^3]`) in `pk_dir`, and optionally a HEALPix 0/1 mask
 in HDF5 (root attributes `PIXTYPE=HEALPIX`, `ORDERING=NESTED|RING`). `nbar_scale` and
-`grid_scale` shrink a run for smoke tests. Seeds follow `seed_base + realization *
-1000 + bin index`, so realizations are reproducible bin by bin.
+`grid_scale` shrink a run for smoke tests; `n_workers` sets the sampler threads
+(default: the core count; the output is the same for any value); `angular_precut`
+(default true) draws only cells whose galaxies can land in the mask. Seeds follow
+`seed_base + realization * 1000 + bin index`, so realizations are reproducible bin by
+bin. `radial_buffer` must cover half a cell diagonal plus `f` times the largest cell
+displacement of the realized field; the run raises if it does not, and records the
+bound per bin in `summary.json`.
 
 Output: `<output_dir>/<run_name>/realization_NNNNN/catalog.parq` with columns
 `x, y, z` (float64, Mpc/h, observer at the origin, redshift space) and `bin` (int8),
