@@ -500,6 +500,186 @@ def run_wall(args):
         print(f"\nwrote {args.out}")
 
 
+# ------------------------------------------------------------------------------ pkg
+
+
+def run_pkg(args):
+    """Split one `target_on_grid` + `grid_pkG` call into host work, upload, FFTs and
+    device syncs.
+
+    The pieces are the REAL library calls in the order `field.generate_fields` makes
+    them, not a mirror of them: `pk_on_grid`, `jitter_power_window`, `grid_xi`,
+    `grid_pk_from_xi` are each timed where they are called. The assembled result is
+    then compared bitwise against `grid_pkG(target_on_grid(...))` in the same process,
+    so a split that has drifted from the shipped path cannot be reported as one.
+    """
+    import time
+
+    import jax
+    import jax.numpy as jnp
+
+    from logunusual import field, suite
+    from logunusual.grid import Box, jitter_power_window, k_grid
+    from logunusual.pk import PowerSpectrum, grid_pk_from_xi, grid_xi, grid_pkG
+
+    b = {x.name: x for x in suite.BIN_SUITE_V28}[args.bin]
+    pk_file = args.pk or resolve_pk(b)
+    spectrum = PowerSpectrum.from_tsv(pk_file)
+    box = Box(b.N_grid, b.L_box)
+    jitter_p = args.jitter_p
+    print(
+        f"{b.name}: N = {b.N_grid}, L = {b.L_box} Mpc/h, b = {b.b}, z_eff = {b.z_eff}"
+    )
+    print(f"device {jax.devices()[0]}   pk {pk_file}   jitter_p {jitter_p}\n")
+
+    # Warm-up: compilation, the CUDA context and the spline's first call all allocate.
+    field.generate_fields(spectrum, b.b, Box(32, b.L_box), 0)
+
+    arms = {"pkG_g": (lambda k: b.b * b.b * spectrum(k)), "pkG_m": spectrum}
+
+    def split_once(target):
+        """One timed pass. Returns `(pieces, pkG, diag)`; `pieces` is a list of
+        `(label, kind, seconds)` with kind in host / upload / device / sync."""
+        pieces = []
+        t = [time.perf_counter()]
+
+        def mark(label, kind, result=None):
+            if kind in ("upload", "device"):
+                jax.block_until_ready(result)
+            now = time.perf_counter()
+            pieces.append((label, kind, now - t[0]))
+            t[0] = now
+
+        # --- host: field.target_on_grid == pk_on_grid / jitter_power_window
+        _, _, k_mag = k_grid(box)
+        mark("k_grid", "host")
+        P = np.asarray(target(k_mag), dtype=np.float64)
+        P[0, 0, 0] = 0.0
+        mark("spline_eval", "host")
+        del k_mag
+        if jitter_p:
+            W = jitter_power_window(box, jitter_p)
+            mark("jitter_window", "host")
+            P = P / W
+            del W
+            mark("window_divide", "host")
+
+        # --- device: pk.grid_pkG
+        Pd = jnp.asarray(P)
+        mark("upload", "upload", Pd)
+        del P
+        xi = grid_xi(Pd, box, jnp)
+        mark("irfftn_xi", "device", xi)
+        del Pd
+        xi_min = float(xi.min())
+        sigma2 = float(xi[0, 0, 0])
+        mark("sync_xi_min_sigma2", "sync")
+        if xi_min <= -1.0:
+            raise ValueError(
+                f"xi(x) reaches {xi_min} <= -1: no lognormal has this P(k)"
+            )
+        xiG = jnp.log1p(xi)
+        mark("log1p", "device", xiG)
+        del xi
+        pkG = grid_pk_from_xi(xiG, box, jnp)
+        mark("rfftn_pkG", "device", pkG)
+        del xiG
+        pkG = pkG.at[0, 0, 0].set(0.0)
+        neg = pkG < 0
+        mark("dc_and_compare", "device", (pkG, neg))
+        n_clipped = int(neg.sum())
+        neg_power = float(jnp.where(neg, -pkG, 0.0).sum())
+        pos_power = float(jnp.where(neg, 0.0, pkG).sum())
+        mark("sync_clip_diagnostics", "sync")
+        pkG = jnp.where(neg, 0.0, pkG)
+        mark("clip", "device", pkG)
+        diag = {
+            "xi_min": xi_min,
+            "sigma2": sigma2,
+            "n_clipped": n_clipped,
+            "clipped_power_fraction": neg_power / pos_power if pos_power > 0 else 0.0,
+        }
+        return pieces, pkG, diag
+
+    rows = []
+    for arm, target in arms.items():
+        runs = []
+        for rep in range(args.repeat):
+            pieces, pkG, diag = split_once(target)
+            runs.append(pieces)
+            total = sum(s for _, _, s in pieces)
+            print(f"   {arm} run {rep + 1}/{args.repeat}: {total:7.3f} s")
+            if rep == 0:
+                # Self-check: the composed split must BE the shipped call, bitwise.
+                ref, diag_ref = grid_pkG(
+                    field.target_on_grid(target, box, jitter_p), box, jnp
+                )
+                bitwise = bool(np.array_equal(np.asarray(pkG), np.asarray(ref)))
+                diag_same = all(diag[k] == diag_ref[k] for k in diag)
+                del ref
+                print(
+                    "      self-check vs grid_pkG(target_on_grid(...)): "
+                    + ("BITWISE" if bitwise else "MISMATCH -- split is VOID")
+                    + ("" if diag_same else "; DIAGNOSTICS DIFFER")
+                )
+            del pkG
+        labels = [(lab, kind) for lab, kind, _ in runs[0]]
+        med = {
+            lab: float(np.median([r[i][2] for r in runs]))
+            for i, (lab, kind) in enumerate(labels)
+        }
+        by_kind = {}
+        for lab, kind in labels:
+            by_kind[kind] = by_kind.get(kind, 0.0) + med[lab]
+        total = sum(med.values())
+        print(f"\n   {arm}: {total:.3f} s (median of {args.repeat})")
+        for i, (lab, kind) in enumerate(labels):
+            vals = [r[i][2] for r in runs]
+            print(
+                f"      {lab:22s} {kind:6s} {med[lab]:7.3f} s  "
+                f"{100 * med[lab] / total:5.1f}%   "
+                f"[{min(vals):.3f}, {max(vals):.3f}]"
+            )
+        for kind in ("host", "upload", "device", "sync"):
+            if kind in by_kind:
+                print(
+                    f"      {'= ' + kind:22s} {'':6s} {by_kind[kind]:7.3f} s  "
+                    f"{100 * by_kind[kind] / total:5.1f}%"
+                )
+        print()
+        rows.append(
+            {
+                "arm": arm,
+                "bitwise_self_check": bitwise,
+                "diagnostics_match": diag_same,
+                "median_s": med,
+                "by_kind_s": by_kind,
+                "total_s": total,
+                "runs": [[list(p) for p in r] for r in runs],
+                "diagnostics": diag,
+            }
+        )
+
+    if args.out:
+        with open(args.out, "w") as fh:
+            json.dump(
+                {
+                    "bin": b.name,
+                    "n": b.N_grid,
+                    "L": b.L_box,
+                    "b": b.b,
+                    "jitter_p": jitter_p,
+                    "pk": pk_file,
+                    "repeat": args.repeat,
+                    "device": str(jax.devices()[0]),
+                    "arms": rows,
+                },
+                fh,
+                indent=2,
+            )
+        print(f"wrote {args.out}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="mode", required=True)
@@ -533,6 +713,14 @@ def main():
     p.add_argument("--pk")
     p.add_argument("--out")
     p.set_defaults(func=run_wall)
+
+    p = sub.add_parser("pkg", help="split the P -> P_G step into host / FFT / sync")
+    p.add_argument("--bin", default="bin05")
+    p.add_argument("--pk")
+    p.add_argument("--jitter-p", type=int, default=1, dest="jitter_p")
+    p.add_argument("--repeat", type=int, default=3)
+    p.add_argument("--out")
+    p.set_defaults(func=run_pkg)
 
     args = ap.parse_args()
     args.func(args)

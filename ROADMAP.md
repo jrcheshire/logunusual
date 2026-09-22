@@ -307,9 +307,67 @@ scatter sits AT the floor, so a new draw can land a hair above it. Nothing loose
 the gate is as it was and its treatment (G11's `band_seeds` fix, or more seeds) is a
 gate-design decision, not made here.
 
+### The P -> P_G step, split (2026-09-21, laptop M4 Max, `m3_device.py pkg`)
+
+The two `target_on_grid` + `grid_pkG` conversions are ~70-75% of the field stage on
+both machines, and their internal split was the last thing assumed rather than
+measured. `pkg` mode times the REAL library calls in the order `generate_fields` makes
+them -- `k_grid`, the spectrum call, `jitter_power_window`, the upload, `grid_xi`,
+`log1p`, `grid_pk_from_xi`, the clip -- and then compares the assembled result
+**bitwise** against `grid_pkG(target_on_grid(...))` in the same process, so a split
+that has drifted from the shipped path cannot be reported as one. Both arms at every
+bin below: BITWISE, diagnostics identical.
+
+Median of 5, bin05 (512^3), CPU backend; `[min, max]` over the runs in the JSON:
+
+| piece | kind | s | % of the step |
+|---|---|---|---|
+| `k_grid` | host | 0.086 | 3.1 |
+| **spectrum spline on the grid** | **host** | **1.674** | **59.3** |
+| `jitter_power_window` + divide | host | 0.088 | 3.1 |
+| upload to device | upload | 0.008 | 0.3 |
+| `irfftn` (xi) | device | 0.659 | 23.3 |
+| `log1p` | device | 0.101 | 3.6 |
+| `rfftn` (P_G) | device | 0.089 | 3.2 |
+| DC / compare / clip | device | 0.028 | 1.0 |
+| the five `float()`/`int()` syncs | sync | 0.088 | 3.1 |
+| | | **2.82** | |
+
+**Host work is 65.5% of the conversion and the spline evaluation alone is 59%**, at
+every grid size measured (bin01 64%, bin02 64%, bin03 63%, bin05 65.5%). The upload is
+0.3% and the five device syncs together are 3.1%, so neither transfer nor
+synchronisation is the story. Only `irfftn_xi` is unstable run to run (0.17-0.66 s at
+512^3, bimodal); every host piece repeats to under 2%, and even at the worst device
+draw the host share stays above 60%.
+
+**Laptop field stage for the same bin (`wall`, bin05): 8.31 s blocked, 8.09 s
+unblocked** -- white_noise 0.52, white_k 0.08, pkG_g 2.95, delta_g 0.33, pkG_m 2.86,
+delta_m 0.28, delta_m_k 0.06, psi_x/y/z 0.40/0.38/0.37. The two conversions are 5.81 s,
+**70% of the stage**, matching the GH200's ~75%.
+
+**This names the cause of the GH200's 1.2x.** 65.5% of 70% is **45% of the whole field
+stage running on the host in numpy/scipy, where no accelerator can touch it**, and 27%
+of the stage is the scipy spline call alone. On Vista the device half of each
+conversion collapses while the host half runs on a Grace core -- slower single-core
+than the M4 Max by ~1.4x, the factor the serial seven-bin run measured (259 vs 187 s) --
+so the GH200's 3.30 s / 2.61 s conversions are consistent with being almost entirely
+host-bound. That last step is arithmetic across two machines, not a controlled
+measurement; the split itself is measured.
+
+**Headroom, measured, NOT implemented (a decision, not a build).** `|k|^2` on the rfft
+grid is `k_f^2 (i^2 + j^2 + l^2)` with the integer bounded by `3 (N/2)^2`, so the
+spline can be tabulated once on every attainable radius and gathered with the integer
+as the index -- no sort. Probed at 256^3 and 512^3: **11.7x on the spline piece at
+both** (512^3: 1.668 -> 0.143 s), which would take the laptop field stage from 8.31 s
+to ~5.3 s. It is **not bitwise**: 13% of cells differ by up to 2.0e-15 relative (median
+exactly 0), because `sqrt(i^2+j^2+l^2) k_f` and `sqrt((i k_f)^2 + ...)` round
+differently. Every catalog would change, so adopting it is the same class of call as
+the per-slab Philox scheme. (Going through `np.unique` instead is a LOSS: the sort of
+67.6M keys costs 4.1 s against the 1.7 s it saves.)
+
 **Still owed by M3:** the seven-bin re-measurement on the laptop (against 187 s /
-15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s); the pkG time
-split; a real float32 dtype knob in `field.py` with `probe_field_arrays` retired;
+15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s); a real
+float32 dtype knob in `field.py` with `probe_field_arrays` retired;
 `jax.jit` of the field stage with a bitwise-before-jit check.
 
 ## M4 -- Physics upgrades (each opens its own plan session)
