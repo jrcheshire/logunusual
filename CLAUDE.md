@@ -46,7 +46,8 @@ pixi run check-format        # black --check; `pixi run format` applies
 pixi run lint                # flake8, max-line 88, ignore E203
 ```
 
-- **`JAX_ENABLE_X64=1` is mandatory** for the field stage. The pixi tasks set it; scripts
+- **`JAX_ENABLE_X64=1` is mandatory** for the field stage (it is what makes float64
+  the default; `dtype="f32"` is an explicit opt-in, not a consequence of dropping it). The pixi tasks set it; scripts
   and tests `setdefault` it and call `jax.config.update("jax_enable_x64", True)` before any
   array work. float32 is allowed for velocity grids and positions in flight; positions are
   written as float64 per the contract.
@@ -73,10 +74,14 @@ pixi run lint                # flake8, max-line 88, ignore E203
   tails, `file_hash`), and the **grid-native** `grid_pkG`: `P -> xi -> log1p -> P_G`
   with two FFTs on the simulation grid. Reports `xi_min`, `sigma2`, the clipped
   negative-`P_G` fraction; raises if `xi <= -1`.
-- `field.py` **[M1, M2]** -- JAX (eager, x64): white noise (numpy PCG64) -> Gaussian ->
-  lognormal galaxy and matter fields -> displacement components (`psi_axes`, any
-  subset of "xyz"; `Fields.psi` dict, `psi_flat`). `generate_fields` is the entry
-  point; `trace=` hook for memory instrumentation.
+- `field.py` **[M1, M2, M3]** -- JAX (eager, x64): white noise (numpy PCG64) ->
+  Gaussian -> lognormal galaxy and matter fields -> displacement components
+  (`psi_axes`, any subset of "xyz"; `Fields.psi` dict, `psi_flat`). `generate_fields`
+  is the entry point; `trace=` hook for memory instrumentation. Two M3 knobs, both
+  defaulting to the M1 behaviour and neither reachable from a `RunConfig`:
+  `dtype="f32"` halves the device arrays (`resolve_dtype`), and `jit=True` compiles
+  `coloured_lognormal` / `displacement`. **`jit` is not bit-preserving**; `dtype`
+  changes every catalog. See ROADMAP M3 for both.
 - `sample.py` **[M1, M3]** -- numpy: intensity, per-slab RNG streams (`slab_rng`,
   `draw_slab`: Poisson then uniform-in-cell placement on one x-slab's own stream),
   own-cell plane-parallel RSD, `split_seed`, `default_workers`.
@@ -237,7 +242,9 @@ them in both directions (G10).
   production-amplitude curves are MEASUREMENTS reported by the gate script.
 - Reproducibility: numpy RNG + numpy sampler are deterministic and, with one Philox
   stream per x-slab, independent of the thread count BY CONSTRUCTION (a test asserts
-  it); the JAX field stage is eager (no jit). Bitwise across processes is asserted on
+  it); the JAX field stage is eager by default (`jit=True` is opt-in and moves
+  37-88% of cells by 0.25-4 float64 eps of the field maximum). Bitwise across
+  processes is asserted on
   Linux (CI) and characterised on macOS (umbrella memory: XLA CPU on macOS-arm64 can
   wobble in the last bit). Measured 2026-09-04 on the M4 laptop: identical bytes at
   32^3 and 64^3; 2026-09-20 `scripts/m1_reproducibility.py --n 64` IDENTICAL.
@@ -307,7 +314,13 @@ them in both directions (G10).
   `sample_shell`, field-time buffer guard, angular pre-cut. Bin 2 sample stage 22.7 s
   -> 2.1 s on 16 cores. G3-G11 re-run under the new scheme: all pass except G4a's
   lowest band, SE 0.69% vs the 0.67% floor (mean fine; `ROADMAP.md` M3).
-  **Still owed:** seven-bin re-measurement on the laptop and Vista; the pkG time
-  split; float32 dtype knob in `field.py`; jit with bitwise-before-jit.
+- **M3 field stage DONE (2026-09-21):** the P -> P_G step is split and it is
+  **host-bound** -- 65% of the conversion is host numpy/scipy and 59% is the spectrum
+  spline, which puts 45% of the whole field stage where no accelerator reaches it and
+  explains the GH200's 1.2x. A real `dtype` knob replaced the f32 probe (live arrays
+  exactly halve); `jit` is in and is not bitwise, and buys nothing on the laptop.
+  **Still owed:** seven-bin re-measurement on the laptop and Vista; the ALLOCATOR
+  peaks (f64/f32 x eager/jit), which only a GPU reports and which decide what fits a
+  card.
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.
