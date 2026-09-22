@@ -125,12 +125,23 @@ def gate_field_identity(spectrum, b, box: Box, seeds, *, jitter_p=1):
 # --------------------------------------------------------------------------- G4
 
 
-def gate_uniform_shot(box: Box, box_est: Box, nbar, seeds, *, jitter_p=1):
+def gate_uniform_shot(
+    box: Box, box_est: Box, nbar, seeds, *, jitter_p=1, band_seeds=None
+):
     """A constant intensity sampled and placed like a real catalog has, after CIC
-    deconvolution on the estimator mesh, exactly the Jing (2005) shot spectrum."""
+    deconvolution on the estimator mesh, exactly the Jing (2005) shot spectrum.
+
+    `band_seeds` (default `len(seeds)`) is the seed count the BANDS are designed for,
+    the same split `gate_catalog` uses. Bands hold enough modes for a GAUSSIAN scatter
+    to meet the SE floor at that count, which leaves the floor met exactly and no
+    margin; the scatter of a Poisson-sampled ratio is super-Gaussian, so the lowest
+    band sits over it. Re-deriving the bands from a larger seed count does not help --
+    the seed count cancels, and the worst band's Gaussian SE is 0.576% at 32 seeds and
+    0.643% at 128 against the 0.667% floor. Running more seeds through FIXED bands is
+    what brings the measured scatter down."""
     shot = validate.shot_noise_k(box_est, nbar)
     pred = validate.shell_average(shot, box_est)
-    edges = band_edges(box_est, box.k_nyq, n_min_indep(len(seeds)))
+    edges = band_edges(box_est, box.k_nyq, n_min_indep(band_seeds or len(seeds)))
     ratios = []
     lam = np.full(box.shape, nbar * box.v_cell)
     for s in seeds:

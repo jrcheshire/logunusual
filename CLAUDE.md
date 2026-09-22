@@ -312,8 +312,11 @@ them in both directions (G10).
 - **M3 sample stage DONE (2026-09-20):** per-slab Philox streams (catalog independent
   of thread count by construction; every seed's catalog changed vs M2), threaded
   `sample_shell`, field-time buffer guard, angular pre-cut. Bin 2 sample stage 22.7 s
-  -> 2.1 s on 16 cores. G3-G11 re-run under the new scheme: all pass except G4a's
-  lowest band, SE 0.69% vs the 0.67% floor (mean fine; `ROADMAP.md` M3).
+  -> 2.1 s on 16 cores. G3-G11 re-run under the new scheme; G4a's lowest band sat over
+  the SE floor and was fixed 2026-09-21 by giving `gate_uniform_shot` the `band_seeds`
+  split (64 seeds on the 32-seed bands, SE 0.69% -> 0.51%). **Re-deriving bands from a
+  larger seed count never clears that floor -- the seed count cancels** (`ROADMAP.md`
+  M3).
 - **M3 field stage DONE (2026-09-21):** the P -> P_G step is split and it is
   **host-bound** -- 65% of the conversion is host numpy/scipy and 59% is the spectrum
   spline, which puts 45% of the whole field stage where no accelerator reaches it and

@@ -39,6 +39,14 @@ def main():
     ap.add_argument("--L", type=float, default=1000.0)
     ap.add_argument("--est-factor", type=int, default=2)
     ap.add_argument("--seeds", type=int, default=48)
+    ap.add_argument(
+        "--band-seeds",
+        type=int,
+        default=None,
+        help="seed count the BANDS are designed for (default: --seeds); more seeds "
+        "than this through the same bands is how a super-Gaussian scatter clears "
+        "the SE floor",
+    )
     ap.add_argument("--seeds-field", type=int, default=192)
     ap.add_argument("--nbar", type=float, default=3e-3)
     ap.add_argument(
@@ -75,7 +83,13 @@ def main():
     print(f"[G3 {time.perf_counter() - t:.0f} s]")
 
     t = time.perf_counter()
-    e = gates.gate_uniform_shot(box, box_est, args.nbar, range(4000, 4000 + args.seeds))
+    e = gates.gate_uniform_shot(
+        box,
+        box_est,
+        args.nbar,
+        range(4000, 4000 + args.seeds),
+        band_seeds=args.band_seeds,
+    )
     report("G4a uniform shot vs Jing", e)
     out["G4a"] = e.as_dict()
     F = field.generate_fields(spectrum, b.b, box, 4100, rsd=False)

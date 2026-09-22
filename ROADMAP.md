@@ -300,12 +300,9 @@ every bin, draws 311M -> 230M on bin 2 (drawn/kept 2.33 -> 1.72), and the window
 built per slab inside the workers, so no N^3 window array exists.
 
 **Full suite under the new scheme (2026-09-20, `pixi run test`, 4:41): 85 passed, 1
-failed -- G4a's lowest band (k = 0.035) has SE 0.69% against the 0.67% floor with 32
+failed -- G4a's lowest band (k = 0.035) had SE 0.69% against the 0.67% floor with 32
 seeds (ratio 1.009 +- 0.007, z +1.3; every band |z| < 2.1; every other band's SE
-inside the floor).** Same mechanism as G11 in M2: bands are sized so a Gaussian
-scatter sits AT the floor, so a new draw can land a hair above it. Nothing loosened;
-the gate is as it was and its treatment (G11's `band_seeds` fix, or more seeds) is a
-gate-design decision, not made here.
+inside the floor).** Resolved 2026-09-21 with G11's `band_seeds` treatment, below.
 
 ### The P -> P_G step, split (2026-09-21, laptop M4 Max, `m3_device.py pkg`)
 
@@ -443,6 +440,33 @@ f64/f32 x eager/jit. `ladder --jit` is in the instrument for it.
 The k grid does NOT get baked into the executable as a constant, which was the risk of
 making `box` static: at 512^3 `displacement_jit`'s `memory_analysis` reports
 generated code 0.000 GiB against 1.004 GiB of argument and 1.004 GiB of temp.
+
+### G4a on fixed bands (2026-09-21)
+
+`gate_uniform_shot` takes `band_seeds`, the split `gate_catalog` has had since M2, and
+G4a now runs **64 seeds on the 32-seed bands**. The lowest band goes from SE 0.69%
+against the 0.667% floor to **0.51%** -- 24% margin -- and its ratio tightens from
+1.009 +- 0.007 (z +1.3) to 1.0004 +- 0.0051 (z +0.07). Gate wall 53 s.
+
+**Nothing was loosened, and the obvious alternative would not have worked.** `TOL/3`
+is not a tightness setting: TOL is 2% and SE <= TOL/3 is what lets the gate resolve a
+2% bias at 3 sigma, so relaxing it would let the gate pass a sampler carrying exactly
+the bias it advertises as excluded. Adding seeds with the bands left to re-derive does
+nothing either, because the seed count CANCELS -- `n_min = ceil(9 / (TOL^2 n_real))`,
+so the Gaussian SE is pinned at TOL/3 whatever `n_real` is. Measured on G4a's own
+geometry, the worst band's Gaussian SE is 0.576% at 32 seeds, 0.587% at 48, 0.621% at
+64 and **0.643% at 128**: it rises, because the bands narrow faster than the seeds
+help. The floor is therefore met exactly by construction with ~15% headroom and no
+more, at any seed count, and a Poisson-sampled ratio's scatter is super-Gaussian
+enough to spend it.
+
+Why it is always the LOWEST band: at high k a single k-shell already holds twice
+`n_min`, so those bands sit far under the floor, while at low k the shells are thin and
+merging lands just over `n_min` (overshoot 1.40, 1.43, 2.01, 1.34 for the first four
+bands at 32 seeds). The low bands have the least mode overshoot and the most
+super-Gaussian scatter, both pushing the same way.
+
+G4a now uses the same bands as G11, so the two gates stay comparable.
 
 **Still owed by M3:** the seven-bin re-measurement on the laptop (against 187 s /
 15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s); and the
