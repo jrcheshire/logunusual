@@ -411,11 +411,44 @@ nothing says it halves. That needs one short GPU ladder run; until then the f64 
 above is the only statement about what fits a card. `probe_field_arrays` and its
 self-check machinery are deleted -- `--dtype f32` now runs the shipped stage.
 
+### `jax.jit` of the field stage, and the bitwise check (2026-09-21)
+
+`generate_fields(..., jit=False)` compiles the stage's two pure device functions,
+`coloured_lognormal` and `displacement` (`box` and `axis` static; `Box` is a frozen
+dataclass so it hashes). Nothing else in the stage can go inside a jit: the spectrum
+spline runs on the host, and `grid_pkG` needs values BACK from the device for its
+diagnostics and its `xi <= -1` raise.
+
+**It is not bit-preserving, and that is why it is off by default.** At 64^3, 37-88% of
+cells move; at 256^3, 88%. The move is round-off and nothing more: normalised to the
+field's own maximum it is **0.25-4.0 float64 eps**, flat across 8 seeds at N = 64 and
+96. The per-CELL relative figure reaches 1e-10 at 64^3 and 2e-8 at 256^3, but that is
+the metric blowing up at zero crossings -- the same artefact this file already flags
+for the ULP table -- and it should not be quoted as the size of the effect. Against
+it, eager repeated twice gave **zero** differing cells on this machine, so the jit
+difference is the compiler, not the platform.
+
+**It does not make the stage faster: 1.07x at 64^3 and 0.95x at 256^3** (laptop CPU,
+median of 3). That follows from the split above -- 45% of the stage is host numpy and
+scipy, which no compiler in JAX can reach, and the device half was already one FFT per
+step with little to fuse.
+
+**It does not change the live-array peak either** (7.02 / 3.51 x N^3 f64 at bin01 and
+bin02, identical eager and jit, both dtypes). The peak that would move is XLA's
+intra-op scratch, which added 50-60% on top in the deneb f64 table, and **a CPU
+backend has no allocator to report it**. That is the one open question jit leaves, and
+it is the same run the f32 allocator question needs: one short GPU `ladder` over
+f64/f32 x eager/jit. `ladder --jit` is in the instrument for it.
+
+The k grid does NOT get baked into the executable as a constant, which was the risk of
+making `box` static: at 512^3 `displacement_jit`'s `memory_analysis` reports
+generated code 0.000 GiB against 1.004 GiB of argument and 1.004 GiB of temp.
+
 **Still owed by M3:** the seven-bin re-measurement on the laptop (against 187 s /
-15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s); the f32
-ALLOCATOR peak on a card (one short ladder run -- the live-array halving above does
-not settle what fits); `jax.jit` of the field stage with a bitwise-before-jit
-check.
+15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s); and the
+ALLOCATOR peaks that the laptop cannot report -- f64/f32 x eager/jit in one short GPU
+`ladder` run, which is what decides whether f32 or fusion makes a 512^3 bin fit a
+card.
 
 ## M4 -- Physics upgrades (each opens its own plan session)
 

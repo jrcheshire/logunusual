@@ -111,6 +111,29 @@ def displacement_z_k(delta_k, box: Box):
     return displacement_k(delta_k, box, "z")
 
 
+# The two pure device functions of the stage, in one place so `jax.jit` has something
+# to compile. Everything else in `generate_fields` either runs on the host (the
+# spectrum spline) or needs a value back from the device (`grid_pkG`'s diagnostics),
+# and neither can live inside a jit. `box` and `axis` are static: `Box` is a frozen
+# dataclass, so it hashes, and the shapes have to be concrete for the FFTs anyway.
+
+
+def coloured_lognormal(white_k, pkG_grid, box: Box):
+    """`lognormal(colour(...))` -- the galaxy or matter field from its P_G."""
+    return lognormal(colour(white_k, pkG_grid, box))
+
+
+def displacement(delta_k, box: Box, axis: str):
+    """One real-space displacement component, `irfftn(displacement_k(...))`."""
+    return jnp.fft.irfftn(
+        displacement_k(delta_k, box, axis), s=box.shape, axes=(0, 1, 2)
+    )
+
+
+coloured_lognormal_jit = jax.jit(coloured_lognormal, static_argnums=(2,))
+displacement_jit = jax.jit(displacement, static_argnums=(1, 2))
+
+
 @dataclass
 class Fields:
     box: Box
@@ -123,6 +146,7 @@ class Fields:
     delta_m: jax.Array | None = None  # matter lognormal grid field
     diagnostics: dict = field(default_factory=dict)
     dtype: str = "f64"  # the device dtype the stage ran in ("f64" / "f32")
+    jit: bool = False  # whether the pure device functions were compiled
 
     @property
     def psi_z(self):
@@ -151,16 +175,21 @@ def generate_fields(
     keep_matter: bool = False,
     psi_axes: str = "z",
     dtype: str = "f64",
+    jit: bool = False,
     trace=None,
 ) -> Fields:
     """Galaxy field with target `b^2 P` and (if `rsd`) the displacement components
     `psi_axes` (a subset of "xyz") from the matter field with target `P`; both
     coloured from the SAME white noise, both targets deconvolved by the
     order-`jitter_p` placement window. `dtype` (`"f64"` / `"f32"`) is the precision of
-    the DEVICE arrays, see `resolve_dtype`. `trace(label)` is called after each array
-    step (memory instrumentation)."""
+    the DEVICE arrays, see `resolve_dtype`. `jit` compiles the stage's two pure device
+    functions (`coloured_lognormal`, `displacement`); it is off by default because it
+    is not bit-preserving. `trace(label)` is called after each array step (memory
+    instrumentation)."""
     trace = trace or (lambda label: None)
     real_dt, _ = resolve_dtype(dtype)
+    _lognormal_of = coloured_lognormal_jit if jit else coloured_lognormal
+    _psi_of = displacement_jit if jit else displacement
     if any(a not in AXES for a in psi_axes) or len(set(psi_axes)) != len(psi_axes):
         raise ValueError(f"psi_axes must be distinct letters of {AXES!r}: {psi_axes!r}")
     w = white_noise(box, ic_seed)
@@ -177,13 +206,14 @@ def generate_fields(
         jnp,
     )
     trace("pkG_g")
-    delta_g = lognormal(colour(white_k, pkG_g, box))
+    delta_g = _lognormal_of(white_k, pkG_g, box)
     del pkG_g
     trace("delta_g")
     diag = {
         "galaxy": diag_g,
         "jitter_p": jitter_p,
         "dtype": dtype,
+        "jit": jit,
         "delta_g_min": float(delta_g.min()),
         "delta_g_max": float(delta_g.max()),
     }
@@ -197,7 +227,7 @@ def generate_fields(
             jnp,
         )
         trace("pkG_m")
-        delta_m = lognormal(colour(white_k, pkG_m, box))
+        delta_m = _lognormal_of(white_k, pkG_m, box)
         del pkG_m
         trace("delta_m")
         delta_m_k = jnp.fft.rfftn(delta_m)
@@ -205,9 +235,7 @@ def generate_fields(
         diag["matter"] = diag_m
         diag["psi_rms"] = {}
         for axis in psi_axes:
-            psi[axis] = jnp.fft.irfftn(
-                displacement_k(delta_m_k, box, axis), s=box.shape, axes=(0, 1, 2)
-            )
+            psi[axis] = _psi_of(delta_m_k, box, axis)
             trace(f"psi_{axis}")
             diag["psi_rms"][axis] = float(jnp.sqrt(jnp.mean(psi[axis] ** 2)))
         del delta_m_k
@@ -225,4 +253,5 @@ def generate_fields(
         delta_m=delta_m if keep_matter else None,
         diagnostics=diag,
         dtype=dtype,
+        jit=jit,
     )

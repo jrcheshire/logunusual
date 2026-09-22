@@ -233,3 +233,34 @@ def test_f32_computes_the_same_field_as_f64(spectrum):
         ulps = float(np.max(np.abs(a - b))) / (eps32 * float(np.max(np.abs(a))))
         print(f"\n   {name}: max |f32 - f64| = {ulps:.1f} eps32 of max|field|")
         assert ulps < 100.0, (name, ulps)
+
+
+def test_jit_is_not_bit_preserving_but_is_round_off(spectrum):
+    # M3 asks for jit WITH a bitwise-before-jit check. It is not bitwise: XLA fuses
+    # and reassociates, so a third to seven eighths of the cells move. What the gate
+    # holds is that the move is round-off and nothing else -- 0.25-4.0 float64 eps of
+    # the field's own maximum, measured over 8 seeds at N = 64 and 96 (the per-CELL
+    # relative figure runs to 1e-10 and higher, but that is the metric blowing up at
+    # zero crossings, the same artefact the ULP table warns about). Gate: 20 eps64.
+    box = Box(64, 640.0)
+    kw = dict(keep_matter=True, psi_axes="xyz")
+    A = field.generate_fields(spectrum, 1.76, box, 3, **kw)
+    B = field.generate_fields(spectrum, 1.76, box, 3, jit=True, **kw)
+    assert A.jit is False and B.jit is True
+    eps64 = float(np.finfo(np.float64).eps)
+    n_moved = 0
+    for name, a, b in [
+        ("delta_g", A.delta_g, B.delta_g),
+        ("delta_m", A.delta_m, B.delta_m),
+        *[(f"psi_{x}", A.psi[x], B.psi[x]) for x in "xyz"],
+    ]:
+        a = np.asarray(a, dtype=np.float64)
+        b = np.asarray(b, dtype=np.float64)
+        n_moved += int(np.count_nonzero(a != b))
+        ulps = float(np.max(np.abs(a - b))) / (eps64 * float(np.max(np.abs(a))))
+        print(f"\n   {name}: jit vs eager {ulps:.2f} eps64 of max|field|")
+        assert ulps < 20.0, (name, ulps)
+    assert n_moved > 0, "jit was bit-preserving here -- the claim above needs redoing"
+    # and the field is still a lognormal overdensity
+    assert float(np.asarray(B.delta_g).min()) > -1.0
+    assert abs(float(np.asarray(B.delta_g).mean())) < 1e-13

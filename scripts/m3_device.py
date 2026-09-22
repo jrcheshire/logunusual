@@ -65,7 +65,7 @@ from logunusual.grid import Box, k_components
 from logunusual.pk import PowerSpectrum, grid_pkG
 
 n, L, pk_file, dtype = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3], sys.argv[4]
-B, name = float(sys.argv[5]), sys.argv[6]
+B, name, use_jit = float(sys.argv[5]), sys.argv[6], sys.argv[7] == "jit"
 spectrum = PowerSpectrum.from_tsv(pk_file)
 
 
@@ -98,10 +98,14 @@ class Peak:
             time.sleep(0.001)
 
 
-report = {"bin": name, "n": n, "dtype": dtype, "L": L, "b": B, "pk": pk_file}
+report = {
+    "bin": name, "n": n, "dtype": dtype, "L": L, "b": B, "pk": pk_file,
+    "jit": use_jit,
+}
 try:
-    # Warm-up at a small N: compilation and the CUDA context allocate.
-    field.generate_fields(spectrum, B, Box(32, L), 0)
+    # Warm-up at a small N: the CUDA context allocates. Under jit this does NOT warm
+    # the compilation -- the shape is different, so the measured leg compiles its own.
+    field.generate_fields(spectrum, B, Box(32, L), 0, jit=use_jit)
     report["warmup_device_peak_bytes"] = device_peak()[0]
 
     def measure(fn, label):
@@ -123,7 +127,7 @@ try:
     def body(pk):
         F = field.generate_fields(
             spectrum, B, Box(n, L), 1,
-            keep_matter=True, psi_axes="xyz", dtype=dtype, trace=pk.cb,
+            keep_matter=True, psi_axes="xyz", dtype=dtype, jit=use_jit, trace=pk.cb,
         )
         assert F.delta_g.dtype == (jnp.float32 if dtype == "f32" else jnp.float64)
         return [F.delta_g, F.delta_m] + list(F.psi.values())
@@ -168,7 +172,7 @@ def run_ladder(args):
     by_name = {b.name: b for b in suite.BIN_SUITE_V28}
     bins = [by_name[nm] for nm in args.bins]
 
-    def child(n, b, pk, dt):
+    def child(n, b, pk, dt, jit):
         proc = subprocess.run(
             [
                 sys.executable,
@@ -180,6 +184,7 @@ def run_ladder(args):
                 dt,
                 str(b.b),
                 b.name,
+                "jit" if jit else "nojit",
             ],
             capture_output=True,
             text=True,
@@ -191,7 +196,7 @@ def run_ladder(args):
     for b in bins:
         for dt in args.dtype:
             n, pk = b.N_grid, resolve_pk(b)
-            rep, proc = child(n, b, pk, dt)
+            rep, proc = child(n, b, pk, dt, args.jit)
             if rep is None:
                 print(
                     f"{b.name} N = {n} [{dt}]: child produced no report "
@@ -215,7 +220,8 @@ def run_ladder(args):
                 continue
             dp = rep.get("device_peak_bytes")
             lv = rep.get("live_peak_bytes", 0)
-            print(f"\n{b.name}  N = {n}  L = {b.L_box:g}  [{dt}]  {rep['device']}")
+            tag = f"{dt}, jit" if args.jit else dt
+            print(f"\n{b.name}  N = {n}  L = {b.L_box:g}  [{tag}]  {rep['device']}")
             print(
                 f"   live JAX arrays  {lv / GIB:6.2f} GiB  "
                 f"({lv / n3:.2f} x N^3 f64)  {rep.get('live_peak_after', '')}"
@@ -567,6 +573,9 @@ def main():
         help="bin06/bin07 also run at 512^3, so bin05 stands for all three",
     )
     p.add_argument("--dtype", nargs="+", default=["f64"], choices=["f64", "f32"])
+    p.add_argument(
+        "--jit", action="store_true", help="compile the stage's pure device functions"
+    )
     p.add_argument("--out")
     p.set_defaults(func=run_ladder)
 
