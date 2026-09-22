@@ -333,9 +333,9 @@ def run_wall(args):
     print(
         f"{b.name}: N = {b.N_grid}, L = {b.L_box} Mpc/h, b = {b.b}, z_eff = {b.z_eff}"
     )
-    print(f"device {jax.devices()[0]}   pk {pk}\n")
+    print(f"device {jax.devices()[0]}   pk {pk}   jit {args.jit}\n")
 
-    field.generate_fields(spectrum, b.b, Box(32, b.L_box), 0)  # warm-up
+    field.generate_fields(spectrum, b.b, Box(32, b.L_box), 0, jit=args.jit)  # warm-up
 
     marks = []
 
@@ -345,7 +345,7 @@ def run_wall(args):
 
     t0 = time.perf_counter()
     F = field.generate_fields(
-        spectrum, b.b, box, 1, keep_matter=True, psi_axes="xyz", trace=cb
+        spectrum, b.b, box, 1, keep_matter=True, psi_axes="xyz", jit=args.jit, trace=cb
     )
     jax.block_until_ready([F.delta_g, F.delta_m] + list(F.psi.values()))
     t_blocked = time.perf_counter() - t0
@@ -359,7 +359,9 @@ def run_wall(args):
     print(f"\n   field stage, serialised by the per-step blocks: {t_blocked:.2f} s")
 
     t1 = time.perf_counter()
-    F2 = field.generate_fields(spectrum, b.b, box, 2, keep_matter=True, psi_axes="xyz")
+    F2 = field.generate_fields(
+        spectrum, b.b, box, 2, keep_matter=True, psi_axes="xyz", jit=args.jit
+    )
     jax.block_until_ready([F2.delta_g, F2.delta_m] + list(F2.psi.values()))
     t_free = time.perf_counter() - t1
     print(f"   field stage, unblocked end to end:              {t_free:.2f} s")
@@ -370,6 +372,7 @@ def run_wall(args):
                     "bin": b.name,
                     "n": b.N_grid,
                     "L": b.L_box,
+                    "jit": args.jit,
                     "stages": stages,
                     "blocked_s": t_blocked,
                     "unblocked_s": t_free,
@@ -589,6 +592,7 @@ def main():
     p = sub.add_parser("wall", help="per-stage wall for one production bin")
     p.add_argument("--bin", default="bin05")
     p.add_argument("--pk")
+    p.add_argument("--jit", action="store_true")
     p.add_argument("--out")
     p.set_defaults(func=run_wall)
 
