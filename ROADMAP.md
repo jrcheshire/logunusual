@@ -365,10 +365,57 @@ differently. Every catalog would change, so adopting it is the same class of cal
 the per-slab Philox scheme. (Going through `np.unique` instead is a LOSS: the sort of
 67.6M keys costs 4.1 s against the 1.7 s it saves.)
 
+### A real float32 knob, and what widens an f32 field stage (2026-09-21)
+
+`generate_fields(..., dtype="f64" | "f32")` sets the precision of the DEVICE arrays;
+`field.resolve_dtype` is the table. Three things it deliberately does not do:
+
+- **The white noise is still drawn in float64** and cast on the way to the device. A
+  numpy generator consumes its stream differently per dtype, so drawing natively would
+  change the realization rather than its precision, and the f32 run would no longer be
+  comparable to the f64 one cell by cell.
+- **`Fields.psi_flat` still returns float64** -- the sampler's interface does not move.
+- **It is not a `RunConfig` field.** f32 changes every catalog, so putting it in the
+  config would change the hash of every existing config for a knob no production run
+  selects. It stays an API / instrument argument until it is a production choice.
+
+**What actually widens an f32 field stage is `k_components`, not `1j`.** It returns
+numpy float64, and with x64 enabled a single float64 array in
+`1j * comps / k2 * delta_k` drags the whole expression to complex128 and the psi
+irfftn back to float64. `1j * float32` on its own is complex64 (jax 0.10.1, measured
+here). `displacement_k` therefore takes its working dtype FROM `delta_k` rather than
+from an argument, so the two can never disagree; nothing else in the stage needed an
+edit, and the float64 path is textually unchanged.
+
+**Gates.** `scripts/m1_reproducibility.py --n 64` IDENTICAL on macOS after the change;
+fast suite 83 passed. Four tests in `tests/test_field.py`: `resolve_dtype` rejects
+anything else; f64 is the default (bitwise on Linux, characterised on macOS, per the
+in-process reproducibility test above); every returned array is float32 under `f32`
+and `psi_flat` is still float64; and the f32 field agrees with the f64 one to **2-22
+float32 eps of the field's own maximum** at (N, L) = (32, 320), (64, 640), (32, 1000),
+i.e. sigma2 from 0.6 to 3.0, with no growth in N -- gated at 100 eps32. The tolerance
+is on max|field|, not the rms: a lognormal's peak sits 30-100x its rms, so an
+rms-normalised tolerance measures that ratio rather than the arithmetic.
+
+**Footprint, laptop `ladder` (live-array instrument; the CPU backend has no
+allocator):**
+
+| bin | N | f64 | f32 |
+|---|---|---|---|
+| bin01 | 192 | 7.02 x N^3 f64 | **3.51** |
+| bin02 | 256 | 7.53 x N^3 f64 | **3.51** |
+
+Exactly half, at both sizes. **The allocator peak in f32 is still unmeasured**, and it
+is the one that decides a fit: XLA intra-op scratch added 50-60% on top in f64 and
+nothing says it halves. That needs one short GPU ladder run; until then the f64 table
+above is the only statement about what fits a card. `probe_field_arrays` and its
+self-check machinery are deleted -- `--dtype f32` now runs the shipped stage.
+
 **Still owed by M3:** the seven-bin re-measurement on the laptop (against 187 s /
-15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s); a real
-float32 dtype knob in `field.py` with `probe_field_arrays` retired;
-`jax.jit` of the field stage with a bitwise-before-jit check.
+15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s); the f32
+ALLOCATOR peak on a card (one short ladder run -- the live-array halving above does
+not settle what fits); `jax.jit` of the field stage with a bitwise-before-jit
+check.
 
 ## M4 -- Physics upgrades (each opens its own plan session)
 

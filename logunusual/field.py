@@ -1,8 +1,9 @@
 """Field stage (JAX, eager): white noise -> Gaussian fields -> lognormal galaxy and
 matter fields -> line-of-sight displacement.
 
-Runs on whatever device JAX has (CPU today, CUDA in the `gpu` env). float64 is
-mandatory: the module enables x64 on import. No `jax.jit` in M1 (one program, so the
+Runs on whatever device JAX has (CPU today, CUDA in the `gpu` env). The module
+enables x64 on import and float64 is the default; `dtype="f32"` halves the device
+footprint (see `resolve_dtype`). No `jax.jit` in M1 (one program, so the
 reproducibility gate has one thing to characterise).
 
 Construction (decided 2026-09-04 after measuring the alternatives, see CLAUDE.md):
@@ -69,13 +70,36 @@ def lognormal(G):
 
 AXES = "xyz"
 
+DTYPES = {"f64": ("float64", "complex128"), "f32": ("float32", "complex64")}
+
+
+def resolve_dtype(dtype):
+    """`"f64"` / `"f32"` -> the `(real, complex)` JAX dtypes of the field stage.
+
+    Only the DEVICE arrays take this dtype. The white noise is always drawn in
+    float64 (a numpy generator consumes its stream differently per dtype, so drawing
+    natively would change the realization rather than its precision) and cast on the
+    way to the device, and `Fields.psi_flat` upcasts for the float64 sampler. The
+    knob is not a `RunConfig` field: f32 changes every catalog, so it stays an API /
+    instrument argument until it is a production choice that the config hash covers.
+    """
+    if dtype not in DTYPES:
+        raise ValueError(f"dtype must be one of {sorted(DTYPES)}, got {dtype!r}")
+    real, cplx = DTYPES[dtype]
+    return jnp.dtype(real), jnp.dtype(cplx)
+
 
 def displacement_k(delta_k, box: Box, axis: str):
     """`i k_axis / k^2 * delta_k`, DC = 0: one component of the continuity
     displacement (`axis` in "xyz")."""
     if axis not in AXES:
         raise ValueError(f"axis must be one of {AXES!r}, got {axis!r}")
-    comps = [jnp.asarray(a) for a in k_components(box)]
+    # The k components come from numpy in float64, and under x64 a single float64
+    # array in this expression widens the whole of it -- that, not the `1j`, is what
+    # drags an f32 field stage back to complex128 (measured, jax 0.10.1). Matching
+    # them to `delta_k` keeps `1j * comps / k2 * delta_k` at complex64.
+    real_dt = jnp.float32 if delta_k.dtype == jnp.complex64 else jnp.float64
+    comps = [jnp.asarray(a, dtype=real_dt) for a in k_components(box)]
     k2 = comps[0] ** 2 + comps[1] ** 2 + comps[2] ** 2
     k2 = k2.at[0, 0, 0].set(1.0)  # avoid 0/0; the DC value is zeroed below
     psi_k = 1j * comps[AXES.index(axis)] / k2 * delta_k
@@ -98,6 +122,7 @@ class Fields:
     psi: dict = field(default_factory=dict)
     delta_m: jax.Array | None = None  # matter lognormal grid field
     diagnostics: dict = field(default_factory=dict)
+    dtype: str = "f64"  # the device dtype the stage ran in ("f64" / "f32")
 
     @property
     def psi_z(self):
@@ -125,24 +150,31 @@ def generate_fields(
     rsd: bool = True,
     keep_matter: bool = False,
     psi_axes: str = "z",
+    dtype: str = "f64",
     trace=None,
 ) -> Fields:
     """Galaxy field with target `b^2 P` and (if `rsd`) the displacement components
     `psi_axes` (a subset of "xyz") from the matter field with target `P`; both
     coloured from the SAME white noise, both targets deconvolved by the
-    order-`jitter_p` placement window. `trace(label)` is called after each array step
-    (memory instrumentation)."""
+    order-`jitter_p` placement window. `dtype` (`"f64"` / `"f32"`) is the precision of
+    the DEVICE arrays, see `resolve_dtype`. `trace(label)` is called after each array
+    step (memory instrumentation)."""
     trace = trace or (lambda label: None)
+    real_dt, _ = resolve_dtype(dtype)
     if any(a not in AXES for a in psi_axes) or len(set(psi_axes)) != len(psi_axes):
         raise ValueError(f"psi_axes must be distinct letters of {AXES!r}: {psi_axes!r}")
     w = white_noise(box, ic_seed)
     trace("white_noise")
-    white_k = jnp.fft.rfftn(jnp.asarray(w))
+    white_k = jnp.fft.rfftn(jnp.asarray(w, dtype=real_dt))
     del w
     trace("white_k")
 
     pkG_g, diag_g = grid_pkG(
-        target_on_grid(lambda k: b * b * spectrum(k), box, jitter_p), box, jnp
+        jnp.asarray(
+            target_on_grid(lambda k: b * b * spectrum(k), box, jitter_p), dtype=real_dt
+        ),
+        box,
+        jnp,
     )
     trace("pkG_g")
     delta_g = lognormal(colour(white_k, pkG_g, box))
@@ -151,6 +183,7 @@ def generate_fields(
     diag = {
         "galaxy": diag_g,
         "jitter_p": jitter_p,
+        "dtype": dtype,
         "delta_g_min": float(delta_g.min()),
         "delta_g_max": float(delta_g.max()),
     }
@@ -158,7 +191,11 @@ def generate_fields(
     psi = {}
     delta_m = None
     if rsd:
-        pkG_m, diag_m = grid_pkG(target_on_grid(spectrum, box, jitter_p), box, jnp)
+        pkG_m, diag_m = grid_pkG(
+            jnp.asarray(target_on_grid(spectrum, box, jitter_p), dtype=real_dt),
+            box,
+            jnp,
+        )
         trace("pkG_m")
         delta_m = lognormal(colour(white_k, pkG_m, box))
         del pkG_m
@@ -187,4 +224,5 @@ def generate_fields(
         psi=psi,
         delta_m=delta_m if keep_matter else None,
         diagnostics=diag,
+        dtype=dtype,
     )

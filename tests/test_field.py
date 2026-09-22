@@ -170,3 +170,66 @@ def test_generate_fields_psi_axes(spectrum):
     for bad in ("zz", "q", "xyzx"):
         with pytest.raises(ValueError):
             field.generate_fields(spectrum, 1.5, box, 9, psi_axes=bad)
+
+
+def test_resolve_dtype_rejects_unknown():
+    assert field.resolve_dtype("f64") == (np.float64, np.complex128)
+    assert field.resolve_dtype("f32") == (np.float32, np.complex64)
+    with pytest.raises(ValueError, match="dtype must be one of"):
+        field.resolve_dtype("float32")
+
+
+def test_f64_is_the_default_dtype(spectrum):
+    # The knob must not move the default path. macOS XLA CPU can differ in the last
+    # bit between two runs of the SAME program (see the reproducibility test above),
+    # so this is bitwise on Linux and characterised on macOS -- the repo's
+    # reproducibility gate is what pins the f64 path.
+    box = Box(32, 320.0)
+    a = np.asarray(field.generate_fields(spectrum, 1.76, box, 7).delta_g)
+    b = np.asarray(field.generate_fields(spectrum, 1.76, box, 7, dtype="f64").delta_g)
+    if platform.system() == "Linux":
+        assert np.array_equal(a, b)
+    else:
+        assert float(np.max(np.abs(a - b) / np.maximum(np.abs(a), 1e-300))) < 1e-12
+
+
+def test_f32_stays_f32_end_to_end(spectrum):
+    # Every device array the stage returns must be float32. The trap this guards is
+    # that `k_components` is numpy float64 and, with x64 enabled, one float64 array
+    # in the displacement expression widens the whole of it back to complex128.
+    box = Box(16, 160.0)
+    F = field.generate_fields(
+        spectrum, 1.76, box, 21, keep_matter=True, psi_axes="xyz", dtype="f32"
+    )
+    assert F.dtype == "f32"
+    assert F.delta_g.dtype == np.float32
+    assert F.delta_m.dtype == np.float32
+    for axis in "xyz":
+        assert F.psi[axis].dtype == np.float32, axis
+    # the sampler's interface is float64 whatever the field stage ran in
+    assert F.psi_flat("xyz").dtype == np.float64
+
+
+def test_f32_computes_the_same_field_as_f64(spectrum):
+    # f32 is a footprint knob, not a different mock: same white noise, same target,
+    # so the fields must agree to float32 round-off. The scale of that round-off is
+    # eps32 times the LARGEST magnitude in the chain, not the rms -- a lognormal's
+    # peak sits 30-100x its rms, so an rms-normalised tolerance would just be
+    # measuring that ratio. Measured 2-22 eps32 at (N, L) = (32, 320), (64, 640) and
+    # (32, 1000), i.e. sigma2 from 0.6 to 3.0, and it does not grow with N; the gate
+    # is 100 eps32, which round-off through three FFTs and an exp cannot exceed.
+    box = Box(32, 320.0)
+    kw = dict(keep_matter=True, psi_axes="xyz")
+    A = field.generate_fields(spectrum, 1.76, box, 11, **kw)
+    B = field.generate_fields(spectrum, 1.76, box, 11, dtype="f32", **kw)
+    eps32 = float(np.finfo(np.float32).eps)
+    for name, a, b in [
+        ("delta_g", A.delta_g, B.delta_g),
+        ("delta_m", A.delta_m, B.delta_m),
+        *[(f"psi_{x}", A.psi[x], B.psi[x]) for x in "xyz"],
+    ]:
+        a = np.asarray(a, dtype=np.float64)
+        b = np.asarray(b, dtype=np.float64)
+        ulps = float(np.max(np.abs(a - b))) / (eps32 * float(np.max(np.abs(a))))
+        print(f"\n   {name}: max |f32 - f64| = {ulps:.1f} eps32 of max|field|")
+        assert ulps < 100.0, (name, ulps)
