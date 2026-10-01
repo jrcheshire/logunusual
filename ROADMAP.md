@@ -567,8 +567,31 @@ stage (one `wall` run each side). The conversion is now 73% device on the laptop
 `irfftn_xi` is still the one bimodal piece (0.16-0.68 s). The GH200 gain is
 unmeasured: the Vista seven-bin re-measurement will carry it.
 
-**Still owed by M3:** the seven-bin re-measurement on the laptop (against 187 s /
-15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s).
+### Seven-bin realization on the laptop, re-measured (2026-09-30, commit `44ee60a`)
+
+`logunusual run` with the default v28 config, full density, the SPHEREx fiducial mask
+(fsky 0.7127), realization 0, 16 sampler threads, M4 Max idle. `logunusual check`:
+layout ok.
+
+| bin | N | field | sample | drawn / kept | realized / target |
+|---|---|---|---|---|---|
+| bin01 | 192 | 0.8 s | 1.9 s | 2.09x | 1.0079 |
+| bin02 | 256 | 1.1 s | 5.6 s | 1.72x | 1.0018 |
+| bin03 | 384 | 2.4 s | 5.0 s | 1.74x | 0.9988 |
+| bin04 | 448 | 5.0 s | 11.7 s | 1.82x | 0.9990 |
+| bin05 | 512 | 7.7 s | 12.3 s | 1.91x | 1.0004 |
+| bin06 | 512 | 7.1 s | 9.8 s | 1.40x | 0.9994 |
+| bin07 | 512 | 7.3 s | 4.0 s | 1.52x | 1.0010 |
+
+**82 s wall against 187 s (2026-09-04), 2.3x**; 651,439,871 galaxies (a new draw
+under the per-slab streams; 651,427,904 before), 15.04 GiB, peak RSS 13.8 GB
+(`/usr/bin/time -l`) against the 19.3 GB recorded then. Field stage 31 s of the 82,
+sample stage (with the streamed write) 50 s. The draw over-shoot fell from 2.4x to
+1.4-2.1x with the angular pre-cut. The headline target, a seven-bin realization in
+single-digit minutes on the laptop, is met at under a minute and a half.
+
+**Still owed by M3:** the seven-bin re-measurement on Vista (against 259 s), which
+also carries the spline table's GH200 gain.
 
 ## M4 -- Physics upgrades (each opens its own plan session)
 

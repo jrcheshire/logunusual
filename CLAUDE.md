@@ -276,7 +276,9 @@ them in both directions (G10).
   on it; the GPU field stage gains only ~1.2x at 512^3 (`ROADMAP.md` M3). Rebuilt
   2026-09-20: per-slab streams on a thread pool + angular pre-cut take bin 2's sample
   stage from 22.7 s to 2.1 s on the laptop's 16 cores (19.8 s on one thread; draws
-  311M -> 230M). Seven-bin re-measurement (laptop, Vista) still owed.
+  311M -> 230M). With that and the spline table (2026-09-30) the full seven-bin
+  realization takes **82 s on the laptop** (was 187 s), peak RSS 13.8 GB; field 31 s,
+  sample + write 50 s. Vista re-measurement still owed.
 
 ## Working rules (project)
 
@@ -334,6 +336,8 @@ them in both directions (G10).
   (max 9 eps from direct evaluation, gate derived in `tests/test_pk.py`); every
   catalog changes at the last bit. Laptop 512^3: each conversion 2.82 -> 1.20 s,
   field stage 8.31 -> 5.16 s blocked (8.09 -> 4.62 unblocked). GH200 gain unmeasured.
-  **Still owed:** seven-bin re-measurement on the laptop and Vista.
+- **Seven-bin laptop re-measurement DONE (2026-09-30):** 82 s vs 187 s, 651.4M
+  galaxies, 15.04 GiB, layout ok (`ROADMAP.md` M3).
+  **Still owed:** seven-bin re-measurement on Vista (against 259 s).
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.
