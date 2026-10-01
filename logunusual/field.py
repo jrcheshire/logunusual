@@ -39,6 +39,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 
+from . import fnl as _fnl  # noqa: E402
 from .grid import Box, jitter_power_window, k_components  # noqa: E402
 from .pk import grid_pkG, pk_on_grid  # noqa: E402
 
@@ -176,12 +177,15 @@ def generate_fields(
     psi_axes: str = "z",
     dtype: str = "f64",
     jit: bool = False,
+    fnl=None,
     trace=None,
 ) -> Fields:
     """Galaxy field with target `b^2 P` and (if `rsd`) the displacement components
     `psi_axes` (a subset of "xyz") from the matter field with target `P`; both
     coloured from the SAME white noise, both targets deconvolved by the
-    order-`jitter_p` placement window. `dtype` (`"f64"` / `"f32"`) is the precision of
+    order-`jitter_p` placement window. `fnl` (an `fnl.LocalPNG`) makes the galaxy
+    target `b(k)^2 P` and leaves the matter field alone; None or f_NL = 0 is the
+    scalar-bias stage bitwise. `dtype` (`"f64"` / `"f32"`) is the precision of
     the DEVICE arrays, see `resolve_dtype`. `jit` compiles the stage's two pure device
     functions (`coloured_lognormal`, `displacement`); it is off by default because it
     is not bit-preserving. `trace(label)` is called after each array step (memory
@@ -200,7 +204,8 @@ def generate_fields(
 
     pkG_g, diag_g = grid_pkG(
         jnp.asarray(
-            target_on_grid(lambda k: b * b * spectrum(k), box, jitter_p), dtype=real_dt
+            target_on_grid(_fnl.galaxy_spectrum(spectrum, b, fnl), box, jitter_p),
+            dtype=real_dt,
         ),
         box,
         jnp,
@@ -217,6 +222,8 @@ def generate_fields(
         "delta_g_min": float(delta_g.min()),
         "delta_g_max": float(delta_g.max()),
     }
+    if fnl is not None:
+        diag["fnl"] = _fnl.diagnostics(spectrum, b, fnl, box)
 
     psi = {}
     delta_m = None

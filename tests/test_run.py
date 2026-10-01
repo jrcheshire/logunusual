@@ -110,6 +110,47 @@ def test_config_yaml_round_trip_and_hash_scope(tmp_path):
         cfg.bins_by_index([3])
 
 
+def test_fnl_config_keys_and_hash_scope(tmp_path):
+    # the worked v28 config hashes as it did before the f_NL keys existed (the hash
+    # stamped on the M3 seven-bin catalogs, jobs 1039040 and the laptop run)
+    v28 = RunConfig.from_yaml(Path(__file__).parents[1] / "configs/v28_default.yaml")
+    assert v28.config_hash == (
+        "f9455b54e3602d9d089f7f993631c93f64c181f30a56021b59222243b89d249f"
+    )
+    assert v28.png is None
+    cfg, _ = _cfg(tmp_path)
+    fnl_cfg, _ = _cfg(tmp_path, f_nl=10.0, primordial={"n_s": 0.96})
+    assert fnl_cfg.config_hash != cfg.config_hash
+    assert _cfg(tmp_path, f_nl=10.0, fnl_p=1.6)[0].config_hash != fnl_cfg.config_hash
+    # at f_NL = 0 the other f_NL keys do not move the hash
+    assert _cfg(tmp_path, fnl_p=1.6)[0].config_hash == cfg.config_hash
+    (tmp_path / "f.yaml").write_text(fnl_cfg.to_yaml())
+    back = RunConfig.from_yaml(tmp_path / "f.yaml")
+    assert back == fnl_cfg and back.config_hash == fnl_cfg.config_hash
+    png = back.png
+    assert png.f_nl == 10.0 and png.n_s == 0.96 and png.A_s == suite.PRIMORDIAL_AS
+    with pytest.raises(ValueError, match="unknown primordial keys"):
+        _cfg(tmp_path, f_nl=1.0, primordial={"sigma8": 0.8})
+
+
+def test_fnl_realization_end_to_end(tmp_path):
+    cfg, _ = _cfg(tmp_path, f_nl=10.0)
+    s = generate_realization(cfg, 0, log=lambda *a: None)
+    p = catalog_path(cfg, 0)
+    assert io.check_layout(p).ok
+    meta = io.read_metadata(p)
+    assert float(meta["f_nl"]) == 10.0 and meta["fnl_convention"] == "LSS"
+    assert float(meta["fnl_A_s"]) == suite.PRIMORDIAL_AS
+    for b, row in zip(cfg.bins, s["bins"]):
+        m = io.bin_metadata(meta, b.index)
+        assert float(m["fnl_delta_b_kf"]) == row["fnl_delta_b_kf"] > 0
+    # the Gaussian run writes f_nl = 0 and nothing else of the f_NL block
+    g, _ = _cfg(tmp_path, output_dir=str(tmp_path / "g"))
+    generate_realization(g, 0, log=lambda *a: None)
+    gm = io.read_metadata(catalog_path(g, 0))
+    assert float(gm["f_nl"]) == 0.0 and "fnl_convention" not in gm
+
+
 def test_effective_bin_scaling(tmp_path):
     cfg, _ = _cfg(tmp_path, grid_scale=0.3, nbar_scale=0.1)
     e = cfg.effective_bin(cfg.bins[1])

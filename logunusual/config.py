@@ -7,16 +7,23 @@ with the same fields. The config hash covers the mock's definition (bins and kno
 not machine paths; input files are hashed separately into the catalog metadata.
 """
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
 from pathlib import Path
 
-from . import suite
+from . import fnl, suite
 from .grid import Box
 from .shell import Shell
 
 BIN_FIELDS = tuple(suite.Bin.__dataclass_fields__)
+
+PRIMORDIAL_DEFAULTS = {
+    "A_s": suite.PRIMORDIAL_AS,
+    "n_s": suite.PRIMORDIAL_NS,
+    "k_pivot": suite.PRIMORDIAL_K_PIVOT,
+    "omega_m": suite.OMEGA_M_DISTANCE,
+}
 
 
 @dataclass(frozen=True)
@@ -36,6 +43,11 @@ class RunConfig:
     angular_precut: bool = True  # draw only cells that can feed the masked shell
     row_group_rows: int = 2**20
     n_radial_bins: int = 8
+    f_nl: float = 0.0  # local f_NL, LSS convention (`fnl`); 0 = Gaussian
+    fnl_p: float = 1.0  # the tracer's p in b(k) = b + 2 (b - p) f_NL delta_c / M(k)
+    # primordial normalisation of the input P(k) tables (A_s, n_s, k_pivot in h/Mpc,
+    # omega_m for g0); missing keys take the v28 tables' values
+    primordial: dict = field(default_factory=dict)
 
     def __post_init__(self):
         object.__setattr__(self, "output_dir", Path(self.output_dir))
@@ -57,6 +69,26 @@ class RunConfig:
             raise ValueError("row_group_rows must be >= 1")
         if self.n_workers is not None and self.n_workers < 1:
             raise ValueError("n_workers must be >= 1 or null")
+        prim = dict(self.primordial or {})
+        unknown = set(prim) - set(PRIMORDIAL_DEFAULTS)
+        if unknown:
+            raise ValueError(f"unknown primordial keys: {sorted(unknown)}")
+        object.__setattr__(
+            self,
+            "primordial",
+            {k: float(prim.get(k, v)) for k, v in PRIMORDIAL_DEFAULTS.items()},
+        )
+        self.png  # validates the f_NL settings at config time
+
+    @property
+    def png(self) -> "fnl.LocalPNG | None":
+        """The f_NL settings for the field stage; None when f_NL = 0, so that path is
+        the Gaussian stage bitwise."""
+        if self.f_nl == 0:
+            return None
+        return fnl.LocalPNG(
+            f_nl=float(self.f_nl), p=float(self.fnl_p), **self.primordial
+        )
 
     # ---------------------------------------------------------------- effective bins
     def effective_bin(self, b: suite.Bin) -> suite.Bin:
@@ -105,15 +137,23 @@ class RunConfig:
             "angular_precut": self.angular_precut,
             "row_group_rows": self.row_group_rows,
             "n_radial_bins": self.n_radial_bins,
+            "f_nl": self.f_nl,
+            "fnl_p": self.fnl_p,
+            "primordial": dict(self.primordial),
             "bins": [asdict(b) for b in self.bins],
         }
         return d
 
     def hash_dict(self) -> dict:
-        """What the config hash covers: everything but names and machine paths."""
+        """What the config hash covers: everything but names and machine paths. The
+        f_NL keys enter only when f_NL != 0, so a Gaussian config hashes as it did
+        before they existed."""
         d = self.to_dict()
         for k in ("run_name", "output_dir", "pk_dir", "mask", "n_workers"):
             d.pop(k)
+        if self.f_nl == 0:
+            for k in ("f_nl", "fnl_p", "primordial"):
+                d.pop(k)
         d["mask"] = self.mask_path is not None
         return d
 
@@ -139,6 +179,9 @@ class RunConfig:
             "angular_precut",
             "row_group_rows",
             "n_radial_bins",
+            "f_nl",
+            "fnl_p",
+            "primordial",
             "bins",
         }
         if unknown:

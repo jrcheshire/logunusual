@@ -17,7 +17,7 @@ os.environ.setdefault("JAX_ENABLE_X64", "1")
 
 import numpy as np  # noqa: E402
 
-from . import __version__, field, io, sample, suite  # noqa: E402
+from . import __version__, field, fnl, io, sample, suite  # noqa: E402
 from .config import RunConfig  # noqa: E402
 from .pk import PowerSpectrum  # noqa: E402
 from .shell import AngularMask, sample_shell  # noqa: E402
@@ -98,8 +98,14 @@ def _global_metadata(cfg: RunConfig, mask, bins, n_workers: int):
         "frame": "observer at origin; each bin its own periodic box centred there",
         "shell_edges": "inclusive",
         "nbar_overdensity_factor": 1.0,
+        "f_nl": float(cfg.f_nl),
         "bins": ",".join(str(b.index) for b in bins),
     }
+    png = cfg.png
+    if png is not None:
+        meta["fnl_convention"] = fnl.CONVENTION
+        meta.update({f"fnl_{k}": v for k, v in png.as_dict().items() if k != "f_nl"})
+        meta["fnl_g0"] = png.g0
     if mask is None:
         meta["mask"] = "none"
         meta["mask_fsky"] = 1.0
@@ -135,7 +141,11 @@ def generate_realization(
     )
     fsky = 1.0 if mask is None else mask.fsky
     n_workers = cfg.n_workers or sample.default_workers()
-    log(f"run {cfg.run_name}: {len(todo)} bin(s), {n_workers} sampler thread(s)")
+    png = cfg.png
+    log(
+        f"run {cfg.run_name}: {len(todo)} bin(s), {n_workers} sampler thread(s)"
+        + ("" if png is None else f", f_NL = {png.f_nl:g} ({fnl.CONVENTION})")
+    )
     t_start = time.perf_counter()
     summary = {
         "realization": realization,
@@ -175,6 +185,7 @@ def generate_realization(
                 ic,
                 jitter_p=cfg.jitter_p,
                 psi_axes="xyz",
+                fnl=png,
                 trace=trace,
             )
             t1 = time.perf_counter()
@@ -240,6 +251,11 @@ def generate_realization(
                 "t_sample_s": t2 - t1,
                 "peak_live_jax_bytes": peak["b"],
             }
+            if png is not None:
+                d = diag["fnl"]
+                row["fnl_delta_b_kf"] = d["delta_b_kf"]
+                row["fnl_b_kf_over_b"] = d["b_kf_over_b"]
+                row["fnl_k_zero"] = d["k_zero"]
             summary["bins"].append(row)
             writer.add_metadata(
                 {

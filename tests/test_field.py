@@ -172,6 +172,28 @@ def test_generate_fields_psi_axes(spectrum):
             field.generate_fields(spectrum, 1.5, box, 9, psi_axes=bad)
 
 
+def test_zero_fnl_is_the_gaussian_stage_bitwise(spectrum):
+    from logunusual.fnl import LocalPNG
+
+    box = Box(32, 500.0)
+    ref = field.generate_fields(spectrum, 1.76, box, 7, psi_axes="xyz")
+    zero = field.generate_fields(
+        spectrum, 1.76, box, 7, psi_axes="xyz", fnl=LocalPNG(f_nl=0.0)
+    )
+    np.testing.assert_array_equal(np.asarray(zero.delta_g), np.asarray(ref.delta_g))
+    for a in "xyz":
+        np.testing.assert_array_equal(np.asarray(zero.psi[a]), np.asarray(ref.psi[a]))
+    # nonzero f_NL moves the galaxy field only; the matter field and Psi do not move
+    up = field.generate_fields(
+        spectrum, 1.76, box, 7, psi_axes="xyz", keep_matter=True, fnl=LocalPNG(10.0)
+    )
+    ref_m = field.generate_fields(spectrum, 1.76, box, 7, keep_matter=True)
+    assert not np.array_equal(np.asarray(up.delta_g), np.asarray(ref.delta_g))
+    np.testing.assert_array_equal(np.asarray(up.delta_m), np.asarray(ref_m.delta_m))
+    np.testing.assert_array_equal(np.asarray(up.psi["z"]), np.asarray(ref.psi["z"]))
+    assert up.diagnostics["fnl"]["b_kf_over_b"] > 1.0
+
+
 def test_resolve_dtype_rejects_unknown():
     assert field.resolve_dtype("f64") == (np.float64, np.complex128)
     assert field.resolve_dtype("f32") == (np.float32, np.complex64)

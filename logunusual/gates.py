@@ -14,7 +14,7 @@ from dataclasses import dataclass, field as dc_field
 
 import numpy as np
 
-from . import field, sample, shell, validate
+from . import field, fnl as _fnl, sample, shell, validate
 from .grid import Box, sinc_window
 from .pk import pk_on_grid
 
@@ -94,19 +94,20 @@ def ensemble(k, ratios, *, target=1.0, tol=TOL, require_se=True, extra=None):
 # --------------------------------------------------------------------------- G3
 
 
-def gate_field_identity(spectrum, b, box: Box, seeds, *, jitter_p=1):
+def gate_field_identity(spectrum, b, box: Box, seeds, *, jitter_p=1, fnl=None):
     """<P(delta_g)> / target = 1 on every band up to the Nyquist (grid identity); the
     matter field likewise. `target` is the deconvolved grid target the field was built
-    for."""
+    for (`b(k)^2 P` with `fnl`, an `fnl.LocalPNG`)."""
     tg = validate.shell_average(
-        field.target_on_grid(lambda k: b * b * spectrum(k), box, jitter_p), box
+        field.target_on_grid(_fnl.galaxy_spectrum(spectrum, b, fnl), box, jitter_p),
+        box,
     )
     tm = validate.shell_average(field.target_on_grid(spectrum, box, jitter_p), box)
     edges = band_edges(box, box.k_nyq, n_min_indep(len(seeds)))
     rg, rm, clipped = [], [], []
     for s in seeds:
         F = field.generate_fields(
-            spectrum, b, box, s, jitter_p=jitter_p, keep_matter=True
+            spectrum, b, box, s, jitter_p=jitter_p, keep_matter=True, fnl=fnl
         )
         pg = validate.field_power(F.delta_g, box)
         pm = validate.field_power(F.delta_m, box)
@@ -407,6 +408,71 @@ def gate_kaiser_linear_limit(
             "f_psi_rms": float(f * np.mean(psi_rms)),
             "nonlinear_budget_at_k_max": budget,
             "shot_over_signal_at_k_max": float(1.0 / nbar / (b * b * scaled(k_max))),
+        },
+    )
+
+
+# ------------------------------------------------------------------ M4: G14 f_NL
+
+
+def gate_fnl_ratio(
+    spectrum,
+    b,
+    box: Box,
+    box_est: Box,
+    nbar,
+    seeds,
+    png,
+    *,
+    jitter_p=1,
+    k_max=None,
+    band_seeds=None,
+):
+    """Matched seeds: per realization, the real-space shot-subtracted monopole of the
+    catalog with `png` (an `fnl.LocalPNG`) over the one without, both from the SAME ic
+    and draw seeds, divided by the predicted `<b(k)^2 P R> / <b^2 P R>` (R the
+    estimator response, the band average mode-weighted as the measurement is). Target 1
+    on every band to `k_max` (default half the generator Nyquist). The shared seeds
+    cancel most of the cosmic variance, so the SE floor is met with far fewer modes
+    than an unmatched ratio would need. `band_seeds` as in `gate_catalog`."""
+    k_max = 0.5 * box.k_nyq if k_max is None else k_max
+    edges = band_edges(box_est, k_max, n_min_indep(band_seeds or len(seeds)))
+    shot = validate.shot_noise_k(box_est, nbar)
+    R = validate.estimator_response(box, box_est, jitter_p)
+    num = validate.shell_average(
+        pk_on_grid(_fnl.galaxy_spectrum(spectrum, b, png), box_est) * R, box_est
+    )
+    den = validate.shell_average(
+        pk_on_grid(_fnl.galaxy_spectrum(spectrum, b), box_est) * R, box_est
+    )
+    ratios, pred = [], None
+    for s in seeds:
+        ic, draw = sample.split_seed(s)
+        P0 = []
+        for p in (png, None):
+            F = field.generate_fields(
+                spectrum, b, box, ic, jitter_p=jitter_p, rsd=False, fnl=p
+            )
+            cat = sample.sample_catalog(F, nbar, draw, rsd=False)
+            P0.append(
+                validate.power_multipoles(
+                    validate.delta_k_from_positions(cat.xyz, box_est),
+                    box_est,
+                    ells=(0,),
+                    shot_k=shot,
+                )
+            )
+        res, res0 = P0
+        kb, meas, _ = band_ratio(res["k"], res["P0"], res0["P0"], res["nmodes"], edges)
+        if pred is None:
+            pred = band_ratio(res["k"], num, den, res["nmodes"], edges)[1]
+        ratios.append(meas / pred)
+    return ensemble(
+        kb,
+        ratios,
+        extra={
+            "predicted_ratio": pred.tolist(),
+            "fnl": _fnl.diagnostics(spectrum, b, png, box),
         },
     )
 
