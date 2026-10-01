@@ -723,6 +723,34 @@ bins 1-3, at -100 in bin 1. The gate boxes follow: G13 on G3's geometry (128^3, 
 clips at neither +100 nor -100; G14's 128^3, L 2000 box clips at -50 and -100, so G14
 runs at +100 and -20.
 
+**Gates as run (2026-10-01, laptop; `tests/test_fnl.py`, `tests/test_gates_m4.py`):**
+
+| gate | result |
+|---|---|
+| G12 | `1 - M / M_{T=1}` = 7.7e-4 at k = 1e-4 (z 0.9) against the derived bound 1.59e-3; on all seven v28 tables 4.5e-4 (z 0.1) to 1.25e-3 (z 1.9), each inside its own bound by 1.5-3x. Mutations fail: pivot read as h/Mpc -6.2e-3, A_s +2% 1.1e-2, CMB normalisation 0.21, no 9/25 0.40. |
+| G13 | 128^3, L 1000, b 1.76, 192 seeds, 60 bands to k_Nyq, 0 clipped modes. f_NL = +100 (`b(k_f)/b` 1.35): galaxy max |z| 3.25, matter 2.73; f_NL = -100 (0.65): galaxy 2.19, matter 2.54. SE 0.05-0.6%, floor met in every band. |
+| G14 | 128^3, L 2000, estimator 256^3, b 1.76, nbar 1e-3, 32 matched seeds, one band per kf-shell to k = 0.05. f_NL = +100: max |z| 1.97; k_f measured/predicted 1.074 +- 0.040 on a predicted 3.48x. f_NL = -20: max |z| 2.16; k_f 0.987 +- 0.024 on a predicted 0.69x. |
+
+**G14 is a consistency gate (|z| < 4, no SE floor)** (JC, 2026-10-01). The repository's
+2%/3 floor is sized to the catalog power itself, and here it would apply to the ratio
+measured/predicted whatever the size of the f_NL effect in that shell. At k_f, 32 seeds
+already resolve f_NL = +100's 248% boost to ~6% of the boost. The lowest shells stay
+noisy under matched seeds. At sigma^2 ~ 3, part of the low-k lognormal power is a white
+term built from the high-k modes; it is nearly the same in both arms but does not scale
+with the shell's own amplitude, so the ratio does not cancel there (per-realization
+scatter ~26% at k_f, ~10% at 2 k_f). Meeting the floor per shell would take ~1500 seeds
+at k_f. The exact, floored statement is G13; the sampler, linear in the intensity, is
+already gated by G4b/G5.
+
+Observed, not investigated: G13's galaxy field at f_NL = +100 reads coherently low
+above k = 0.2 (mean -0.26% over 32 bands, mean z -2.1; max |z| 3.25 at k = 0.35), where
+G3 on the same geometry reads +0.10% and G13 at -100 reads -0.11%. With nothing clipped
+the grid identity is exact, and the lognormal's high-k scatter is correlated across k
+(rare peaks), so this is within the gate.
+
+Full suite 117 passed (8:36), `check-format` + `lint` clean, `m1_reproducibility --n
+64` IDENTICAL.
+
 ## M5 -- Ensemble production
 
 Replace or supplement prod_v2 (100 realizations). Realization count, machine, and whether

@@ -426,17 +426,25 @@ def gate_fnl_ratio(
     *,
     jitter_p=1,
     k_max=None,
-    band_seeds=None,
+    n_min=1,
 ):
     """Matched seeds: per realization, the real-space shot-subtracted monopole of the
     catalog with `png` (an `fnl.LocalPNG`) over the one without, both from the SAME ic
     and draw seeds, divided by the predicted `<b(k)^2 P R> / <b^2 P R>` (R the
     estimator response, the band average mode-weighted as the measurement is). Target 1
-    on every band to `k_max` (default half the generator Nyquist). The shared seeds
-    cancel most of the cosmic variance, so the SE floor is met with far fewer modes
-    than an unmatched ratio would need. `band_seeds` as in `gate_catalog`."""
+    on every band to `k_max` (default half the generator Nyquist).
+
+    A CONSISTENCY gate (|z| < Z_MAX, no SE floor): it checks that the run path hands
+    the catalog the injected b(k). The exact statement is the grid identity with the
+    b(k) target (`gate_field_identity(..., fnl=)`), and the sampler is linear in the
+    intensity (G4b, G5). Bands hold >= `n_min` independent modes (default 1: every
+    kf-shell its own band) so the k^-2 shape is seen. The lowest shells stay noisy
+    under matched seeds: at sigma^2 ~ 3 part of the low-k lognormal power is a white
+    term from the high-k modes, nearly the same in both arms but not scaling with the
+    shell's own amplitude, so the ratio does not cancel there (per-realization scatter
+    ~26% at k_f, 128^3, L 2000, f_NL = 100)."""
     k_max = 0.5 * box.k_nyq if k_max is None else k_max
-    edges = band_edges(box_est, k_max, n_min_indep(band_seeds or len(seeds)))
+    edges = band_edges(box_est, k_max, n_min)
     shot = validate.shot_noise_k(box_est, nbar)
     R = validate.estimator_response(box, box_est, jitter_p)
     num = validate.shell_average(
@@ -470,6 +478,7 @@ def gate_fnl_ratio(
     return ensemble(
         kb,
         ratios,
+        require_se=False,
         extra={
             "predicted_ratio": pred.tolist(),
             "fnl": _fnl.diagnostics(spectrum, b, png, box),
