@@ -58,8 +58,9 @@ target. Positive f_NL up to 100 runs on every default bin.
 A bin may name a second table, `pk_galaxy_file` (e.g. halofit), for the galaxy target
 only; `pk_file` stays the linear table behind the matter field, the velocities and
 M(k). The run checks at load that the two tables agree at their lowest k node (same z
-and cosmology). `configs/v28_halofit_2x.yaml` is the example: Takahashi halofit on
-grids twice the default. The tables come from
+and cosmology), and refuses a galaxy target that no lognormal reaches on the bin's
+grid. `configs/v28_halofit.yaml` is the example: Takahashi halofit on finer grids
+(twice the default in bins 4-7, the finest attainable in bins 1-3). The tables come from
 `pixi run -e tables pk-tables make --model {linear,halofit}` (CAMB, kh 1e-4 to 10;
 `pk-tables check` regenerates the default linear tables byte for byte).
 

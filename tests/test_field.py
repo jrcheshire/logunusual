@@ -335,3 +335,16 @@ def test_galaxy_table_moves_the_galaxy_field_only(spectrum):
         ).diagnostics["fnl"]
     )
     np.testing.assert_array_equal(np.asarray(up.psi["z"]), np.asarray(ref.psi["z"]))
+
+
+def test_clipping_galaxy_table_raises(spectrum):
+    # 32^3, L = 320, b = 1.76: the linear target clips nothing (sigma^2 3.0); a
+    # halofit-like boost P * (1 + 10 x / (1 + x)), x = (k / 0.3)^2, clips 6451 P_G
+    # modes (sigma^2 16.1, measured)
+    box = Box(32, 320.0)
+    x = (spectrum.k / 0.3) ** 2
+    nl = pk.PowerSpectrum(spectrum.k, spectrum.P * (1 + 10 * x / (1 + x)))
+    with pytest.raises(ValueError, match="galaxy table's target is not attainable"):
+        field.generate_fields(spectrum, 1.76, box, 1, galaxy_table=nl)
+    F = field.generate_fields(spectrum, 1.76, box, 1, galaxy_table=spectrum)
+    assert F.diagnostics["galaxy"]["n_clipped"] == 0

@@ -1,9 +1,12 @@
 # logunusual run config: the seven v28 bins with a Takahashi-halofit galaxy target on
-# 2x grids (ROADMAP M4). Paths are placeholders. Each bin names two tables in pk_dir,
-# both from `pixi run -e tables pk-tables make --model {linear,halofit}`: `pk_file`
-# (linear: the matter field, the velocities and f_NL's M(k)) and `pk_galaxy_file`
-# (halofit: the galaxy target b^2 P only). Every other bin field is the v28 default.
-run_name: v28_halofit_2x
+# finer grids (ROADMAP M4). Paths are placeholders. Each bin names two tables in
+# pk_dir, both from `pixi run -e tables pk-tables make --model {linear,halofit}`:
+# `pk_file` (linear: the matter field, the velocities and f_NL's M(k)) and
+# `pk_galaxy_file` (halofit: the galaxy target b^2 P only). N_grid is twice the v28
+# grid in bins 4-7 and the finest 5-smooth grid with no clipped P_G mode in bins 1-3
+# (270 / 450 / 720; at 2x a lognormal cannot reach halofit there, and a run with a
+# galaxy table raises on any clipped mode). Every other bin field is the v28 default.
+run_name: v28_halofit
 output_dir: runs            # <output_dir>/<run_name>/realization_NNNNN/catalog.parq
 pk_dir: data                # holds one P(k) TSV per bin, named by the bin's pk_file
 mask:                       # omit (or null) for the full sky
@@ -11,7 +14,7 @@ mask:                       # omit (or null) for the full sky
   dataset: MASK
 seed_base: 137000000        # seed = seed_base + realization * 1000 + bin index
 nbar_scale: 1.0             # multiplies every bin's nbar (smoke runs)
-grid_scale: 2.0             # every bin's N_grid x 2: cells 3.9-7.8 Mpc/h, N <= 1024
+grid_scale: 1.0             # N_grid per bin below: cells 4.9-7.8 Mpc/h
 radial_buffer: 150.0        # Mpc/h drawn beyond the shell on both sides
 jitter_p: 1                 # uniform-in-cell placement (the validated construction)
 n_workers: null             # sampler threads, one x-slab per task (null: core count)
@@ -34,7 +37,7 @@ bins:
   rmin: 0.0
   rmax: 568.215
   L_box: 1500
-  N_grid: 192
+  N_grid: 270
   nbar: 0.07347
   b: 1.03
   f: 0.581925899217631
@@ -48,7 +51,7 @@ bins:
   rmin: 568.215
   rmax: 1077.778
   L_box: 2500
-  N_grid: 256
+  N_grid: 450
   nbar: 0.04166
   b: 1.32
   f: 0.6797684347521443
@@ -62,7 +65,7 @@ bins:
   rmin: 1077.778
   rmax: 1530.733
   L_box: 3500
-  N_grid: 384
+  N_grid: 720
   nbar: 0.01556
   b: 1.45
   f: 0.7557107920438596
@@ -76,7 +79,7 @@ bins:
   rmin: 1530.733
   rmax: 1931.84
   L_box: 4500
-  N_grid: 448
+  N_grid: 896
   nbar: 0.0114
   b: 1.57
   f: 0.8127713696136714
@@ -90,7 +93,7 @@ bins:
   rmin: 1931.84
   rmax: 2287.33
   L_box: 5000
-  N_grid: 512
+  N_grid: 1024
   nbar: 0.008482
   b: 1.76
   f: 0.8550542749312783
@@ -104,7 +107,7 @@ bins:
   rmin: 2287.33
   rmax: 3139.33
   L_box: 7000
-  N_grid: 512
+  N_grid: 1024
   nbar: 0.001808
   b: 2.22
   f: 0.9096055989924714
@@ -118,7 +121,7 @@ bins:
   rmin: 3139.33
   rmax: 3764.808
   L_box: 8000
-  N_grid: 512
+  N_grid: 1024
   nbar: 0.0003491
   b: 3.29
   f: 0.950584507968171

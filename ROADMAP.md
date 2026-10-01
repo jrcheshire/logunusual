@@ -651,7 +651,7 @@ observations above are open performance questions, not M3 deliverables.
 ## M4 -- Physics upgrades (each opens its own plan session)
 
 - **Nonlinear input P(k):** halofit TSVs (`scripts/make_pk_tables.py`) together
-  with the 2x grids (up to 1024^3) the finer scales need; at the production grids
+  with the finer grids (up to 1024^3) the finer scales need; at the production grids
   halofit alone changes little because the grid Nyquist binds first. Construction and
   gates below.
 - **f_NL scale-dependent bias in the input galaxy P(k):**
@@ -752,7 +752,7 @@ the grid identity is exact, and the lognormal's high-k scatter is correlated acr
 Full suite 117 passed (8:36), `check-format` + `lint` clean, `m1_reproducibility --n
 64` IDENTICAL.
 
-### Nonlinear input P(k) on 2x grids: construction and gates (planned 2026-10-01)
+### Nonlinear input P(k) on finer grids: construction and gates (planned 2026-10-01)
 
 **Two tables per bin; only the galaxy target goes nonlinear** (JC, 2026-10-01).
 `Bin.pk_file` stays the linear table and drives the matter field, the velocities and
@@ -777,8 +777,13 @@ nodes (the v28 tables' 2500 per decade):
 `matterpower_camb_{lin,halofit}_kmax10_zeff={z}.tsv`. The 2x grids' corners reach
 k = 1.39 (bin 1), past the v28 tables' kh = 1.
 
-**Grids: `grid_scale = 2` for every bin** (JC): N 384 / 512 / 768 / 896 / 1024 /
-1024 / 1024, cells 3.9-7.8 Mpc/h.
+**Grids** (planned as `grid_scale = 2` for every bin, JC; revised after the
+attainability sweep below, JC 2026-10-01): **N 270 / 450 / 720 / 896 / 1024 / 1024 /
+1024**, cells 4.9-7.8 Mpc/h. Bins 4-7 are at 2x; at 2x no lognormal reaches the halofit
+target in bins 1-3, so they take the finest 5-smooth grid with zero clipped P_G modes
+(the clip-free edges measured are N 276 / 462 / 736, the first clipping 280 / 468 /
+744). **A run with a galaxy table raises on any clipped galaxy P_G mode** (JC), as an
+f_NL run does: the clipped field's excess power spreads to every k.
 
 **Checks and gates (thresholds derived in the tests or scripts that carry them):**
 
@@ -796,7 +801,9 @@ No new catalog-level gate: the sampler is unchanged and linear in the intensity
 **Measurements before G15/G16 (heavy, each priced and asked first):** attainability at
 grid_scale 1 and 2 for every bin with the linear-kmax10 and halofit tables (galaxy and
 matter `xi_min`, sigma^2, clipped P_G modes and power fraction; the M4 f_NL set), and
-one 2x realization per bin (wall, peak RSS, `psi_max` against the 150 Mpc/h buffer).
+one realization per bin on `configs/v28_halofit.yaml`'s grids (wall, peak RSS,
+`psi_max` against the 150 Mpc/h buffer). G15's 128^3, L 625 box is clip-free: galaxy
+halofit sigma^2 11.89 (production bin 5 at 1024^3: 11.89), matter 2.02.
 GPU f64 at 1024^3 (~96 GiB allocator peak) does not fit a GH200; f32 (~48) would, but
 f32 is not a `RunConfig` field. Reported, not decided here.
 
@@ -824,6 +831,43 @@ linear tables regenerate **byte-identical** (26 s). New tables, sha256 (first 12
   (bin 5, k 0.64), 1.45, 1.24 (bin 7, k 0.40). Below k = 0.005 (CAMB's
   `Min_kh_nonlinear`) the ratio still departs from 1, by at most 5.9e-4 (z 0.1);
   not investigated.
+
+**Attainability at grid_scale 1 and 2, measured (2026-10-01, laptop,
+`scripts/m4_fnl.py attain`, kh-10 tables; `runs/m4/attain_gs{1,2}*_{lin,halofit}.json`;
+peak RSS 10.3 GB at 512^3, 28.8 GB at 896^3, 43.4 GB at 1024^3, ~4.4 min for bins 5-7
+per table).** Grid sigma^2 (matter; galaxy linear; galaxy halofit) and the Gaussian
+galaxy P_G clipping, f_NL = 0:
+
+| bin | grid | dx | sigma^2 m | sigma^2 g lin | clipped lin | sigma^2 g halofit | clipped halofit (power frac) | xi_min halofit |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 192 | 7.8 | 2.82 | 2.99 | 0 | 5.23 | 0 | -0.062 |
+| 1 | 384 | 3.9 | 5.52 | 5.85 | 0 | 20.09 | **10,222,648 (1.7e-1)** | -0.781 |
+| 2 | 256 | 9.8 | 1.78 | 3.10 | 0 | 4.39 | 0 | -0.021 |
+| 2 | 512 | 4.9 | 3.65 | 6.36 | 0 | 15.52 | **2,429,104 (2.2e-3)** | -0.322 |
+| 3 | 384 | 9.1 | 1.57 | 3.29 | 0 | 4.61 | 0 | -0.014 |
+| 3 | 768 | 4.6 | 3.16 | 6.65 | 0 | 15.80 | **1,122,793 (1.1e-4)** | -0.182 |
+| 4 | 448 | 10.0 | 1.15 | 2.84 | 0 | 3.64 | 0 | -0.010 |
+| 4 | 896 | 5.0 | 2.37 | 5.85 | 0 | 11.71 | 0 | -0.011 |
+| 5 | 512 | 9.8 | 0.99 | 3.06 | 0 | 3.84 | 0 | -0.008 |
+| 5 | 1024 | 4.9 | 2.02 | 6.26 | 0 | 11.89 | 0 | -0.008 |
+| 6 | 512 | 13.7 | 0.47 | 2.31 | 0 | 2.54 | 0 | -0.007 |
+| 6 | 1024 | 6.8 | 1.04 | 5.11 | 0 | 7.03 | 0 | -0.006 |
+| 7 | 512 | 15.6 | 0.26 | 2.77 | 5 | 2.92 | 5 | -0.012 |
+| 7 | 1024 | 7.8 | 0.58 | 6.32 | 0 | 7.61 | 0 | -0.006 |
+
+- The kh-10 linear tables at grid_scale 1 reproduce the M4 attainability table's clip
+  counts in every row. The matter targets clip nowhere.
+- **At 2x the linear galaxy targets clip nowhere (Gaussian), and bin 7's fundamental
+  clips no longer. The halofit galaxy targets clip nowhere in bins 4-7 and massively in
+  bins 1-3.** f_NL != 0 adds the same few low-k modes as with the linear target (the
+  M4 picture) on top; bins 1-3 at 2x clip at every f_NL.
+- Exact ensemble power of the clipped halofit field against its target, per kf-shell
+  (`grid_pk_from_xi(expm1(grid_xi(P_G clipped)))`, no realizations;
+  `runs/m4/clip_realized_halofit_gs2.json`): **bin 1, 1.04-1.16x below k = 0.1, up to
+  2.2x near the Nyquist (clipped modes at |k| 0.29-0.81)**; bin 2, <= 0.5% below
+  k = 0.3 and up to +1.15% in the clipped band (|k| 0.38-0.58); bin 3, <= 0.07%
+  everywhere (clipped |k| 0.46-0.58). The excess spreads to every k, not only the
+  clipped shells.
 
 ## M5 -- Ensemble production
 

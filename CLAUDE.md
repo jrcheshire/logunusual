@@ -102,7 +102,7 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
   changes every catalog. See ROADMAP M3 for both. `fnl=` (M4) makes the galaxy target
   `b(k)^2 P`; with f_NL != 0 any clipped galaxy P_G mode raises. `galaxy_table=` (M4)
   replaces P in the galaxy target only; matter field and displacements are the
-  linear run's bitwise.
+  linear run's bitwise, and any clipped galaxy P_G mode raises.
 - `sample.py` **[M1, M3]** -- numpy: intensity, per-slab RNG streams (`slab_rng`,
   `draw_slab`: Poisson then uniform-in-cell placement on one x-slab's own stream),
   own-cell plane-parallel RSD, `split_seed`, `default_workers`.
@@ -133,7 +133,7 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
   `m2_gates.py`, `m3_device.py`, `m4_fnl.py` (attainability sweep; `--grid-scale`,
   `--pk-template`, `--pk-galaxy-template`, matter rows), `make_pk_tables.py` (CAMB
   tables, `tables` env). `configs/v28_default.yaml` is the worked run config;
-  `configs/v28_halofit_2x.yaml` the halofit galaxy target on 2x grids.
+  `configs/v28_halofit.yaml` the halofit galaxy target on finer grids.
 
 ## Construction (M1, decided 2026-09-04 from measurements; first principles, not a
 ## port of the Julia code)
@@ -182,7 +182,9 @@ Grid `N^3`, box `L`, `dx = L/N`, `V_cell = dx^3`; cell centres at `(i + 0.5) dx`
    `b(k)^2 P_gal`; `pk_file` stays linear and drives the matter field, the velocities
    (continuity is a linear relation) and M(k) (`P = M^2 P_Phi` is linear theory).
    Halofit pays only with finer cells: at the 2x grids' Nyquist it is 1.24x (bin 7)
-   to 4.2x (bin 1) the linear power.
+   to 4.2x (bin 1) the linear power, and there a lognormal cannot reach it in bins
+   1-3 (grid sigma^2 15-20), so `configs/v28_halofit.yaml` gives them the finest
+   clip-free grids; a galaxy-table run raises on any clipped P_G mode.
 
 **Why not the Julia construction.** Henry's 0.11.0 applies a `sinc^-p` deconvolution
 to the lognormal field AFTER exponentiation. Measured here at bin-5 settings (128^3,
@@ -403,9 +405,10 @@ them in both directions (G10).
   fail), G13 (grid identity with b(k), f_NL = +-100, floor met), G14 (matched-seed
   catalog ratio, consistency gate). f_NL < 0 is unattainable on the lowest shells of
   bins 2-7 and raises; positive f_NL runs on every bin.
-- **M4 halofit on 2x grids, in progress (2026-10-01)**, branch `jc/m4-halofit`:
-  table maker + P1 (byte-identical), two-table plumbing, pair check, fast tests.
-  Next: the 2x attainability sweep and one 2x realization per bin (heavy; ~100 GB at
-  1024^3), then G15/G16 (`ROADMAP.md` M4).
+- **M4 halofit on finer grids, in progress (2026-10-01)**, branch `jc/m4-halofit`:
+  table maker + P1 (byte-identical), two-table plumbing, pair check, attainability at
+  1x / 2x (halofit at 2x clips in bins 1-3 -> grids 270 / 450 / 720 there, 2x in 4-7;
+  a galaxy-table run raises on any clip). Next: one realization per bin on those
+  grids, then G15/G16 (`ROADMAP.md` M4).
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.

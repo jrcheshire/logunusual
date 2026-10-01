@@ -317,6 +317,9 @@ def _with_galaxy_table(name):
     return [dict(b, pk_galaxy_file=name) for b in TOY_BINS]
 
 
+SET = ("pk_file", "pk_galaxy_file", "N_grid")  # what the halofit config sets
+
+
 def test_galaxy_table_config_and_hash_scope(tmp_path):
     cfg, _ = _cfg(tmp_path)
     two, _ = _cfg(tmp_path, bins=_with_galaxy_table("gal.tsv"))
@@ -328,11 +331,13 @@ def test_galaxy_table_config_and_hash_scope(tmp_path):
     (tmp_path / "t.yaml").write_text(two.to_yaml())
     back = RunConfig.from_yaml(tmp_path / "t.yaml")
     assert back == two and back.config_hash == two.config_hash
-    hf = RunConfig.from_yaml(Path(__file__).parents[1] / "configs/v28_halofit_2x.yaml")
-    assert [hf.box(b).n_mesh for b in hf.bins] == [384, 512, 768, 896, 1024, 1024, 1024]
+    # the worked halofit config: finest clip-free grids in bins 1-3, 2x in bins 4-7
+    hf = RunConfig.from_yaml(Path(__file__).parents[1] / "configs/v28_halofit.yaml")
+    assert [hf.box(b).n_mesh for b in hf.bins] == [270, 450, 720, 896, 1024, 1024, 1024]
     assert all("halofit" in b.pk_galaxy_file and "lin" in b.pk_file for b in hf.bins)
-    v28 = {k: v for k, v in asdict(suite.BIN_SUITE_V28[0]).items() if "pk" not in k}
-    assert {k: v for k, v in asdict(hf.bins[0]).items() if "pk" not in k} == v28
+    for b, v in zip(hf.bins, suite.BIN_SUITE_V28):
+        keep = lambda x: {k: y for k, y in asdict(x).items() if k not in SET}  # noqa
+        assert keep(b) == keep(v)
 
 
 def test_galaxy_table_realization_end_to_end(tmp_path):

@@ -187,7 +187,9 @@ def generate_fields(
     order-`jitter_p` placement window. `spectrum` is the linear P(k);
     `galaxy_table` (a nonlinear P(k), None = `spectrum`) replaces it in the galaxy
     target only, so the matter field and displacements are those of the linear run
-    bitwise. `fnl` (an `fnl.LocalPNG`) makes the galaxy
+    bitwise; with it, a galaxy P_G that clips any mode raises (at small cells halofit
+    is beyond a lognormal, and the excess spreads to every k). `fnl` (an
+    `fnl.LocalPNG`) makes the galaxy
     target `b(k)^2 P` and leaves the matter field alone; None or f_NL = 0 is the
     scalar-bias stage bitwise. With f_NL != 0 a galaxy P_G that clips any mode
     raises: where b(k)^2 P falls toward zero at low k (f_NL < 0) the lognormal cannot
@@ -229,6 +231,13 @@ def generate_fields(
             f"b(k_f)/b = {d['b_kf_over_b']:.3f}, b(k) changes sign at "
             f"k = {d['k_zero']}); clipping them would leave the realized power off "
             "the target on the lowest shells"
+        )
+    if galaxy_table is not None and diag_g["n_clipped"]:
+        raise ValueError(
+            f"the galaxy table's target is not attainable by a lognormal on this grid "
+            f"({diag_g['n_clipped']} P_G modes < 0, sigma^2 = {diag_g['sigma2']:.2f}); "
+            "the clipped field's power departs from the target at every k -- use a "
+            "coarser grid"
         )
     delta_g = _lognormal_of(white_k, pkG_g, box)
     del pkG_g
