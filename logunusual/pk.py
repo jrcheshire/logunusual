@@ -83,6 +83,31 @@ class PowerSpectrum:
         return out
 
 
+def check_table_pair(linear: PowerSpectrum, galaxy: PowerSpectrum) -> float:
+    """Check that a nonlinear galaxy-target table belongs with a bin's linear table;
+    returns `|P_gal / P_lin - 1|` at their common lowest node, raises otherwise.
+
+    Bound: `k0^2 sigma_v^2`, `sigma_v^2 = (1 / 6 pi^2) int P_lin dk` over the linear
+    table -- the leading low-k nonlinear correction (`P_13 -> -k^2 sigma_v^2 P_lin`),
+    so any nonlinear model of the same linear spectrum stays inside it at `k0`. A
+    table at another z or cosmology is off at order unity (17-35% between adjacent
+    v28 bins). Both tables must start at the same k."""
+    if linear.k[0] != galaxy.k[0]:
+        raise ValueError(
+            f"P(k) tables start at different k ({linear.k[0]} vs {galaxy.k[0]} h/Mpc)"
+        )
+    sigma_v2 = np.trapezoid(linear.P, linear.k) / (6.0 * np.pi**2)
+    bound = linear.k[0] ** 2 * sigma_v2
+    dev = abs(galaxy.P[0] / linear.P[0] - 1.0)
+    if not dev <= bound:
+        raise ValueError(
+            f"galaxy P(k) table departs from the linear one by {dev:.3e} at "
+            f"k = {linear.k[0]} h/Mpc (bound k0^2 sigma_v^2 = {bound:.3e}): not the "
+            "same z / cosmology"
+        )
+    return float(dev)
+
+
 def radius_index(box: Box) -> np.ndarray:
     """`i^2 + j^2 + l^2` (int32) on the rfft grid, the integer mode indices in
     `fftfreq` / `rfftfreq` order, so `|k| = k_f sqrt(radius_index)`."""

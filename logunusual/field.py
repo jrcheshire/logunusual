@@ -178,12 +178,16 @@ def generate_fields(
     dtype: str = "f64",
     jit: bool = False,
     fnl=None,
+    galaxy_table=None,
     trace=None,
 ) -> Fields:
     """Galaxy field with target `b^2 P` and (if `rsd`) the displacement components
     `psi_axes` (a subset of "xyz") from the matter field with target `P`; both
     coloured from the SAME white noise, both targets deconvolved by the
-    order-`jitter_p` placement window. `fnl` (an `fnl.LocalPNG`) makes the galaxy
+    order-`jitter_p` placement window. `spectrum` is the linear P(k);
+    `galaxy_table` (a nonlinear P(k), None = `spectrum`) replaces it in the galaxy
+    target only, so the matter field and displacements are those of the linear run
+    bitwise. `fnl` (an `fnl.LocalPNG`) makes the galaxy
     target `b(k)^2 P` and leaves the matter field alone; None or f_NL = 0 is the
     scalar-bias stage bitwise. With f_NL != 0 a galaxy P_G that clips any mode
     raises: where b(k)^2 P falls toward zero at low k (f_NL < 0) the lognormal cannot
@@ -208,7 +212,9 @@ def generate_fields(
 
     pkG_g, diag_g = grid_pkG(
         jnp.asarray(
-            target_on_grid(_fnl.galaxy_spectrum(spectrum, b, fnl), box, jitter_p),
+            target_on_grid(
+                _fnl.galaxy_spectrum(spectrum, b, fnl, galaxy_table), box, jitter_p
+            ),
             dtype=real_dt,
         ),
         box,

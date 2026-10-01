@@ -2,7 +2,7 @@
 # is omitted, so the table in `logunusual/suite.py` is used (print it with
 # `logunusual default-config`). Any other table can be given as `bins:` with the same
 # fields (name, index, z_min, z_max, z_eff, rmin, rmax, L_box, N_grid, nbar, b, f,
-# pk_file).
+# pk_file, and optionally pk_galaxy_file: see v28_halofit_2x.yaml).
 run_name: v28
 output_dir: runs            # <output_dir>/<run_name>/realization_NNNNN/catalog.parq
 pk_dir: data                # holds one P(k) TSV per bin, named by the bin's pk_file

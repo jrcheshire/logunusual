@@ -2,6 +2,8 @@
 scope, end-to-end realizations with a mask, the exact Poisson gate through the whole
 path, skip/overwrite, cross-process reproducibility, CLI commands."""
 
+from dataclasses import asdict
+import hashlib
 import json
 import platform
 import subprocess
@@ -294,3 +296,69 @@ def test_cli_commands(tmp_path, capsys):
 
     d = yaml.safe_load(capsys.readouterr().out)
     assert len(d["bins"]) == 7 and d["seed_base"] == suite.SEED_BASE
+
+
+# ----------------------------------------------------------------- two P(k) tables
+
+
+def _two_table_dir(tmp_path, factor):
+    """`pk_dir` with the linear test table and `gal.tsv` = `P * factor(k)`."""
+    import shutil
+
+    d = tmp_path / "pk"
+    d.mkdir(parents=True, exist_ok=True)
+    shutil.copy(DATA / PK, d / PK)
+    k, P = np.loadtxt(DATA / PK, comments="#").T
+    np.savetxt(d / "gal.tsv", np.c_[k, P * factor(k)], header="kh\tPk", comments="# ")
+    return d
+
+
+def _with_galaxy_table(name):
+    return [dict(b, pk_galaxy_file=name) for b in TOY_BINS]
+
+
+def test_galaxy_table_config_and_hash_scope(tmp_path):
+    cfg, _ = _cfg(tmp_path)
+    two, _ = _cfg(tmp_path, bins=_with_galaxy_table("gal.tsv"))
+    assert two.config_hash != cfg.config_hash
+    assert two.pk_galaxy_path(two.bins[0]).name == "gal.tsv"
+    assert cfg.pk_galaxy_path(cfg.bins[0]) == cfg.pk_path(cfg.bins[0])
+    # unset, the field neither serialises nor hashes
+    assert all("pk_galaxy_file" not in b for b in cfg.to_dict()["bins"])
+    (tmp_path / "t.yaml").write_text(two.to_yaml())
+    back = RunConfig.from_yaml(tmp_path / "t.yaml")
+    assert back == two and back.config_hash == two.config_hash
+    hf = RunConfig.from_yaml(Path(__file__).parents[1] / "configs/v28_halofit_2x.yaml")
+    assert [hf.box(b).n_mesh for b in hf.bins] == [384, 512, 768, 896, 1024, 1024, 1024]
+    assert all("halofit" in b.pk_galaxy_file and "lin" in b.pk_file for b in hf.bins)
+    v28 = {k: v for k, v in asdict(suite.BIN_SUITE_V28[0]).items() if "pk" not in k}
+    assert {k: v for k, v in asdict(hf.bins[0]).items() if "pk" not in k} == v28
+
+
+def test_galaxy_table_realization_end_to_end(tmp_path):
+    pk_dir = _two_table_dir(tmp_path, lambda k: 1 + (k / 0.5) ** 2)
+    cfg, _ = _cfg(tmp_path, pk_dir=pk_dir, bins=_with_galaxy_table("gal.tsv"))
+    generate_realization(cfg, 0, log=lambda *a: None)
+    p = catalog_path(cfg, 0)
+    assert io.check_layout(p).ok
+    meta = io.read_metadata(p)
+    gal_sha = hashlib.sha256((pk_dir / "gal.tsv").read_bytes()).hexdigest()
+    for b in cfg.bins:
+        m = io.bin_metadata(meta, b.index)
+        assert m["pk_file"] == PK and m["pk_galaxy_file"] == "gal.tsv"
+        assert m["pk_galaxy_sha256"] == gal_sha != m["pk_sha256"]
+    # single-table runs stamp the linear table as the galaxy one
+    g, _ = _cfg(tmp_path, output_dir=str(tmp_path / "g"))
+    generate_realization(g, 0, log=lambda *a: None, bins=[1])
+    m = io.bin_metadata(io.read_metadata(catalog_path(g, 0)), 1)
+    assert m["pk_galaxy_file"] == PK and m["pk_galaxy_sha256"] == m["pk_sha256"]
+    # a galaxy table from another z / cosmology is refused at load
+    bad_dir = _two_table_dir(tmp_path / "bad", lambda k: 0.8 + 0 * k)
+    bad, _ = _cfg(
+        tmp_path,
+        pk_dir=bad_dir,
+        bins=_with_galaxy_table("gal.tsv"),
+        output_dir=str(tmp_path / "b"),
+    )
+    with pytest.raises(ValueError, match="not the same z"):
+        generate_realization(bad, 0, log=lambda *a: None)

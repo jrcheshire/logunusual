@@ -119,3 +119,22 @@ def test_diagnostics_find_the_zero_crossing(spectrum):
     k_prev = box.k_f * np.sqrt(np.arange(1, q))  # every grid |k| below it
     assert np.all(B5 + fnl.delta_b(k_prev, B5, spectrum, png) < 0.0)
     assert B5 + fnl.delta_b(np.array([kz]), B5, spectrum, png)[0] >= 0.0
+
+
+def test_galaxy_table_takes_m_from_the_linear_table(spectrum):
+    # target (b + delta_b[linear])^2 P_gal exactly; M from the galaxy table differs
+    from logunusual.pk import PowerSpectrum
+
+    k = np.geomspace(1e-4, 1.0, 257)
+    nl = PowerSpectrum(spectrum.k, spectrum.P * (1 + (spectrum.k / 0.2) ** 2))
+    png = fnl.LocalPNG(f_nl=50.0)
+    got = fnl.galaxy_spectrum(spectrum, B5, png, nl)(k)
+    want = (B5 + fnl.delta_b(k, B5, spectrum, png)) ** 2 * nl(k)
+    np.testing.assert_array_equal(got, want)
+    wrong = (B5 + fnl.delta_b(k, B5, nl, png)) ** 2 * nl(k)
+    assert np.abs(got / wrong - 1).max() > 1e-3
+    # f_NL = 0: exactly b * b * P_gal
+    for p in (None, fnl.LocalPNG(f_nl=0.0)):
+        np.testing.assert_array_equal(
+            fnl.galaxy_spectrum(spectrum, B5, p, nl)(k), B5 * B5 * nl(k)
+        )

@@ -45,7 +45,14 @@ pixi run -e gpu setup-gpu    # ONE-TIME (CUDA): jax[cuda12]; the -e gpu is REQUI
 pixi run test                # pytest -q; `pytest -m "not slow"` is the dev loop
 pixi run check-format        # black --check; `pixi run format` applies
 pixi run lint                # flake8, max-line 88, ignore E203
+pixi run -e tables pk-tables check   # P1: regenerate the v28 linear tables byte for byte
+pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into data/
 ```
+
+- The `tables` env (osx-arm64 only, no JAX, no default feature) pins conda-forge
+  `camb 1.5.9` build `py312h904ef0c_0`, the build that made the v28 tables; P1 is
+  byte-identical with it (2026-10-01). Run CAMB with `OMP_NUM_THREADS=1` on a shared
+  laptop (26 s for the seven tables).
 
 - **`JAX_ENABLE_X64=1` is mandatory** for the field stage (it is what makes float64
   the default; `dtype="f32"` is an explicit opt-in, not a consequence of dropping it). The pixi tasks set it; scripts
@@ -63,11 +70,13 @@ pixi run lint                # flake8, max-line 88, ignore E203
   P(k) TSVs and the mask h5 live on the LogNormalSimulations
   `jc/spherex-broad-bin-inputs` branch and in
   `~/spherex/myscripts/lognormal_mocks_diagnostics/data/`; copy into `data/` locally.
+  The kh-10 linear and halofit tables (`matterpower_camb_{lin,halofit}_kmax10_zeff=*`)
+  are made by `scripts/make_pk_tables.py`; sha256s in ROADMAP M4.
 
 ## Code layout (`logunusual/`)
 
 - `suite.py` **[M0]** -- the default bin table `BIN_SUITE_V28` (frozen `Bin`s, now
-  with a `pk_file` name), `seed_for`, the seed base and stride, `RADIAL_BUFFER`, mask
+  with a `pk_file` name and an optional `pk_galaxy_file`, M4), `seed_for`, the seed base and stride, `RADIAL_BUFFER`, mask
   constants, distance cosmology. Dependency-free.
 - `grid.py` **[M1]** -- `Box`, k-grids (rfft on z), Hermitian weights, the separable
   `sinc` windows, the CIC shot-noise alias factor (Jing 2005).
@@ -77,10 +86,12 @@ pixi run lint                # flake8, max-line 88, ignore E203
   negative-`P_G` fraction; raises if `xi <= -1`. `pk_on_grid` evaluates the spectrum
   once per integer radius `q = i^2 + j^2 + l^2` and gathers by `radius_index` (M3);
   ~1e-15 relative from evaluating on `k_grid`'s `|k|`, not bitwise.
+  `check_table_pair` (M4): a galaxy table must match the linear one at their common
+  lowest node to `k0^2 sigma_v^2` (the leading low-k nonlinear correction).
 - `fnl.py` **[M4]** -- local f_NL, LSS convention: `LocalPNG` (f_nl, p, delta_c, and
   the tables' A_s / n_s / k_pivot / omega_m), `poisson_M` (`sqrt(P / P_Phi) / g0`
-  from the bin's own table), `delta_b`, `galaxy_spectrum` (exactly `b * b * spectrum`
-  at f_NL = 0), `growth_md`, `diagnostics` (`b(k_f)/b`, the k where b(k) changes sign).
+  from the bin's own table), `delta_b`, `galaxy_spectrum` (exactly `b * b * P_gal`
+  at f_NL = 0; `galaxy_table=` is `P_gal`, M stays on the linear table), `growth_md`, `diagnostics` (`b(k_f)/b`, the k where b(k) changes sign).
 - `field.py` **[M1, M2, M3, M4]** -- JAX (eager, x64): white noise (numpy PCG64) ->
   Gaussian -> lognormal galaxy and matter fields -> displacement components
   (`psi_axes`, any subset of "xyz"; `Fields.psi` dict, `psi_flat`). `generate_fields`
@@ -89,7 +100,9 @@ pixi run lint                # flake8, max-line 88, ignore E203
   `dtype="f32"` halves the device arrays (`resolve_dtype`), and `jit=True` compiles
   `coloured_lognormal` / `displacement`. **`jit` is not bit-preserving**; `dtype`
   changes every catalog. See ROADMAP M3 for both. `fnl=` (M4) makes the galaxy target
-  `b(k)^2 P`; with f_NL != 0 any clipped galaxy P_G mode raises.
+  `b(k)^2 P`; with f_NL != 0 any clipped galaxy P_G mode raises. `galaxy_table=` (M4)
+  replaces P in the galaxy target only; matter field and displacements are the
+  linear run's bitwise.
 - `sample.py` **[M1, M3]** -- numpy: intensity, per-slab RNG streams (`slab_rng`,
   `draw_slab`: Poisson then uniform-in-cell placement on one x-slab's own stream),
   own-cell plane-parallel RSD, `split_seed`, `default_workers`.
@@ -104,7 +117,8 @@ pixi run lint                # flake8, max-line 88, ignore E203
 - `config.py` **[M2]** -- `RunConfig` (YAML <-> dataclass; bins default to the suite;
   `nbar_scale`/`grid_scale` for smoke runs; `config_hash` over the mock definition,
   not paths; `f_nl` / `fnl_p` / `primordial` enter the hash only when f_NL != 0, and
-  `png` is None at f_NL = 0), `default_config`.
+  `png` is None at f_NL = 0; an empty `pk_galaxy_file` is neither serialised nor
+  hashed, `_bin_dict`), `default_config`, `pk_galaxy_path`.
 - `run.py` **[M2]** -- `generate_realization`: bins in order, field stage -> streamed
   shell draw -> writer; per-bin metadata and `summary.json`; `plan_realization`.
 - `cli.py` **[M2]** -- `logunusual run | check | default-config` (console script).
@@ -116,8 +130,10 @@ pixi run lint                # flake8, max-line 88, ignore E203
   `gate_shell_density` (M2); `gate_field_identity(..., fnl=)` (G13) and the
   matched-seed `gate_fnl_ratio` (G14, consistency only) (M4).
 - `scripts/` -- `m1_gates.py`, `m1_reproducibility.py`, `m1_memory.py`,
-  `m2_gates.py`, `m3_device.py`, `m4_fnl.py` (attainability sweep).
-  `configs/v28_default.yaml` is the worked run config.
+  `m2_gates.py`, `m3_device.py`, `m4_fnl.py` (attainability sweep; `--grid-scale`,
+  `--pk-template`, `--pk-galaxy-template`, matter rows), `make_pk_tables.py` (CAMB
+  tables, `tables` env). `configs/v28_default.yaml` is the worked run config;
+  `configs/v28_halofit_2x.yaml` the halofit galaxy target on 2x grids.
 
 ## Construction (M1, decided 2026-09-04 from measurements; first principles, not a
 ## port of the Julia code)
@@ -160,6 +176,13 @@ Grid `N^3`, box `L`, `dx = L/N`, `V_cell = dx^3`; cell centres at `(i + 0.5) dx`
    realizable low-k power at these sigma^2, P_G clips on the lowest shells, and the
    clipped field's power there would be 1.4x-306x the target. An f_NL run therefore
    raises on any clipped galaxy mode (attainability table in ROADMAP M4).
+
+8. **Nonlinear galaxy target (M4)**: a bin's `pk_galaxy_file` (Takahashi halofit,
+   CAMB with the Bird et al. neutrino terms) replaces P in the galaxy target,
+   `b(k)^2 P_gal`; `pk_file` stays linear and drives the matter field, the velocities
+   (continuity is a linear relation) and M(k) (`P = M^2 P_Phi` is linear theory).
+   Halofit pays only with finer cells: at the 2x grids' Nyquist it is 1.24x (bin 7)
+   to 4.2x (bin 1) the linear power.
 
 **Why not the Julia construction.** Henry's 0.11.0 applies a `sinc^-p` deconvolution
 to the lognormal field AFTER exponentiation. Measured here at bin-5 settings (128^3,
@@ -231,7 +254,8 @@ them in both directions (G10).
   `bin{index:02d}.*` (shell, box, grid, `b`, `f`, `nbar_target`, `realized_nbar` =
   `n_kept / (fsky V_shell)`, `n_galaxies`, `n_drawn`, `n_left_box`, `n_window_cells`
   and `_radial`, `lam_window`, `psi_max`, `required_buffer`, seeds, `pk_file`,
-  `pk_sha256`, `sigma2_*`, `xi_min_galaxy`, `clipped_power_fraction`, `psi_rms`,
+  `pk_sha256`, `pk_galaxy_file`, `pk_galaxy_sha256` (the linear table's when the bin
+  names none), `sigma2_*`, `xi_min_galaxy`, `clipped_power_fraction`, `psi_rms`,
   timings, peak live JAX bytes). `f_nl` is always written; with f_NL != 0 also
   `fnl_convention` (LSS), `fnl_p`, `fnl_delta_c`, `fnl_A_s`, `fnl_n_s`, `fnl_k_pivot`,
   `fnl_omega_m`, `fnl_g0`, and per bin `fnl_delta_b_kf`, `fnl_b_kf_over_b`,
@@ -259,9 +283,13 @@ them in both directions (G10).
   (Om0 = 0.30966, 0.06 eV neutrino), NOT the distance cosmology's Om0 = 0.3153; they
   differ by 0.4-0.9%. Pinned by `tests/test_suite.py`; a deliberate change is an M4
   decision, not a cleanup.
-- Input P(k) is **linear CAMB truncated at kh = 1.0**; the grid Nyquist (0.20-0.40 h/Mpc)
-  binds first. Halofit only pays with a finer grid (M4). The TSV spline is log-log
-  cubic with power-law tails from the end-node secants.
+- The default input P(k) is **linear CAMB truncated at kh = 1.0**; the grid Nyquist
+  (0.20-0.40 h/Mpc) binds first. Halofit only pays with a finer grid (M4); the 2x
+  grids' corners reach k = 1.39, so they take the kh-10 tables. The kh-10 linear
+  tables share the v28 nodes exactly but differ from them by up to 1.2e-5 in P (CAMB's
+  `kmax`), more than the pair bound: pair a halofit table with the kh-10 linear one,
+  never with the v28 one. The TSV spline is log-log cubic with power-law tails from the
+  end-node secants.
 - Linear-theory RSD is a k -> 0 limit. At production amplitude (bin 5, f Psi_rms =
   3.2 Mpc/h, sigma_g^2 = 3.9 on the grid) the galaxy-matter correlation is 0.99 at
   k = 0.035 and 0.965 at k = 0.19, and P2/P0 exceeds Kaiser by 25% at k = 0.19. The
@@ -374,7 +402,10 @@ them in both directions (G10).
   convention, |f_NL| <= 100 measured. G12 (M normalisation, derived bound, mutations
   fail), G13 (grid identity with b(k), f_NL = +-100, floor met), G14 (matched-seed
   catalog ratio, consistency gate). f_NL < 0 is unattainable on the lowest shells of
-  bins 2-7 and raises; positive f_NL runs on every bin. Halofit + 1024^3 is the other
-  M4 item, not started.
+  bins 2-7 and raises; positive f_NL runs on every bin.
+- **M4 halofit on 2x grids, in progress (2026-10-01)**, branch `jc/m4-halofit`:
+  table maker + P1 (byte-identical), two-table plumbing, pair check, fast tests.
+  Next: the 2x attainability sweep and one 2x realization per bin (heavy; ~100 GB at
+  1024^3), then G15/G16 (`ROADMAP.md` M4).
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.

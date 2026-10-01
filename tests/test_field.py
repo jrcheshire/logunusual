@@ -301,3 +301,37 @@ def test_jit_is_not_bit_preserving_but_is_round_off(spectrum):
     # and the field is still a lognormal overdensity
     assert float(np.asarray(B.delta_g).min()) > -1.0
     assert abs(float(np.asarray(B.delta_g).mean())) < 1e-13
+
+
+def test_galaxy_table_moves_the_galaxy_field_only(spectrum):
+    # two tables: the galaxy target takes `galaxy_table`, the matter field and the
+    # displacements stay the linear run's, bitwise
+    from logunusual.fnl import LocalPNG
+
+    box = Box(32, 500.0)
+    kw = dict(psi_axes="xyz", keep_matter=True)
+    ref = field.generate_fields(spectrum, 1.76, box, 7, **kw)
+    same = field.generate_fields(spectrum, 1.76, box, 7, galaxy_table=spectrum, **kw)
+    nl = pk.PowerSpectrum(spectrum.k, spectrum.P * (1 + (spectrum.k / 0.2) ** 2))
+    two = field.generate_fields(spectrum, 1.76, box, 7, galaxy_table=nl, **kw)
+    gal = field.generate_fields(nl, 1.76, box, 7, **kw)
+    np.testing.assert_array_equal(np.asarray(same.delta_g), np.asarray(ref.delta_g))
+    np.testing.assert_array_equal(np.asarray(two.delta_g), np.asarray(gal.delta_g))
+    assert not np.array_equal(np.asarray(two.delta_g), np.asarray(ref.delta_g))
+    for F in (same, two):
+        np.testing.assert_array_equal(np.asarray(F.delta_m), np.asarray(ref.delta_m))
+        for a in "xyz":
+            np.testing.assert_array_equal(np.asarray(F.psi[a]), np.asarray(ref.psi[a]))
+    assert two.diagnostics["galaxy"]["sigma2"] > ref.diagnostics["galaxy"]["sigma2"]
+    assert two.diagnostics["matter"] == ref.diagnostics["matter"]
+    # with f_NL the bias response comes from the linear table
+    up = field.generate_fields(
+        spectrum, 1.76, box, 7, galaxy_table=nl, fnl=LocalPNG(10.0), **kw
+    )
+    assert (
+        up.diagnostics["fnl"]
+        == field.generate_fields(
+            spectrum, 1.76, box, 7, fnl=LocalPNG(10.0), **kw
+        ).diagnostics["fnl"]
+    )
+    np.testing.assert_array_equal(np.asarray(up.psi["z"]), np.asarray(ref.psi["z"]))

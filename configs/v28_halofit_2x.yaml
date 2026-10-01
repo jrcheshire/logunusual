@@ -1,0 +1,126 @@
+# logunusual run config: the seven v28 bins with a Takahashi-halofit galaxy target on
+# 2x grids (ROADMAP M4). Paths are placeholders. Each bin names two tables in pk_dir,
+# both from `pixi run -e tables pk-tables make --model {linear,halofit}`: `pk_file`
+# (linear: the matter field, the velocities and f_NL's M(k)) and `pk_galaxy_file`
+# (halofit: the galaxy target b^2 P only). Every other bin field is the v28 default.
+run_name: v28_halofit_2x
+output_dir: runs            # <output_dir>/<run_name>/realization_NNNNN/catalog.parq
+pk_dir: data                # holds one P(k) TSV per bin, named by the bin's pk_file
+mask:                       # omit (or null) for the full sky
+  path: data/mask.h5        # HEALPix 0/1 map, root attrs PIXTYPE=HEALPIX, ORDERING
+  dataset: MASK
+seed_base: 137000000        # seed = seed_base + realization * 1000 + bin index
+nbar_scale: 1.0             # multiplies every bin's nbar (smoke runs)
+grid_scale: 2.0             # every bin's N_grid x 2: cells 3.9-7.8 Mpc/h, N <= 1024
+radial_buffer: 150.0        # Mpc/h drawn beyond the shell on both sides
+jitter_p: 1                 # uniform-in-cell placement (the validated construction)
+n_workers: null             # sampler threads, one x-slab per task (null: core count)
+angular_precut: true        # draw only cells whose galaxies can land in the mask
+row_group_rows: 1048576     # parquet row-group pin (2^20)
+n_radial_bins: 8            # sub-shells of the density-profile diagnostic
+f_nl: 0.0                   # local f_NL (LSS convention); 0 = Gaussian
+fnl_p: 1.0                  # p in b(k) = b + 2 (b - p) f_NL delta_c / M(k)
+# primordial:                # the P(k) tables' normalisation, for M(k); defaults:
+#   A_s: 2.1e-9
+#   n_s: 0.9649
+#   k_pivot: 0.0742280285   # h/Mpc (0.05 / Mpc)
+#   omega_m: 0.3153
+bins:
+- name: bin01
+  index: 1
+  z_min: 0.0
+  z_max: 0.2
+  z_eff: 0.1
+  rmin: 0.0
+  rmax: 568.215
+  L_box: 1500
+  N_grid: 192
+  nbar: 0.07347
+  b: 1.03
+  f: 0.581925899217631
+  pk_file: matterpower_camb_lin_kmax10_zeff=0.1.tsv
+  pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=0.1.tsv
+- name: bin02
+  index: 2
+  z_min: 0.2
+  z_max: 0.4
+  z_eff: 0.3
+  rmin: 568.215
+  rmax: 1077.778
+  L_box: 2500
+  N_grid: 256
+  nbar: 0.04166
+  b: 1.32
+  f: 0.6797684347521443
+  pk_file: matterpower_camb_lin_kmax10_zeff=0.3.tsv
+  pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=0.3.tsv
+- name: bin03
+  index: 3
+  z_min: 0.4
+  z_max: 0.6
+  z_eff: 0.5
+  rmin: 1077.778
+  rmax: 1530.733
+  L_box: 3500
+  N_grid: 384
+  nbar: 0.01556
+  b: 1.45
+  f: 0.7557107920438596
+  pk_file: matterpower_camb_lin_kmax10_zeff=0.5.tsv
+  pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=0.5.tsv
+- name: bin04
+  index: 4
+  z_min: 0.6
+  z_max: 0.8
+  z_eff: 0.7
+  rmin: 1530.733
+  rmax: 1931.84
+  L_box: 4500
+  N_grid: 448
+  nbar: 0.0114
+  b: 1.57
+  f: 0.8127713696136714
+  pk_file: matterpower_camb_lin_kmax10_zeff=0.7.tsv
+  pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=0.7.tsv
+- name: bin05
+  index: 5
+  z_min: 0.8
+  z_max: 1.0
+  z_eff: 0.9
+  rmin: 1931.84
+  rmax: 2287.33
+  L_box: 5000
+  N_grid: 512
+  nbar: 0.008482
+  b: 1.76
+  f: 0.8550542749312783
+  pk_file: matterpower_camb_lin_kmax10_zeff=0.9.tsv
+  pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=0.9.tsv
+- name: bin06
+  index: 6
+  z_min: 1.0
+  z_max: 1.6
+  z_eff: 1.3
+  rmin: 2287.33
+  rmax: 3139.33
+  L_box: 7000
+  N_grid: 512
+  nbar: 0.001808
+  b: 2.22
+  f: 0.9096055989924714
+  pk_file: matterpower_camb_lin_kmax10_zeff=1.3.tsv
+  pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=1.3.tsv
+- name: bin07
+  index: 7
+  z_min: 1.6
+  z_max: 2.2
+  z_eff: 1.9
+  rmin: 3139.33
+  rmax: 3764.808
+  L_box: 8000
+  N_grid: 512
+  nbar: 0.0003491
+  b: 3.29
+  f: 0.950584507968171
+  pk_file: matterpower_camb_lin_kmax10_zeff=1.9.tsv
+  pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=1.9.tsv

@@ -98,16 +98,18 @@ def delta_b(k, b: float, spectrum, png: LocalPNG):
     return out
 
 
-def galaxy_spectrum(spectrum, b: float, png: LocalPNG | None = None):
-    """The galaxy target `b(k)^2 P(k)` as a callable of k. With `png` None or
-    `f_nl == 0` it is exactly `b * b * spectrum(k)`, the f_NL-free expression, so that
-    path is bitwise unchanged."""
+def galaxy_spectrum(spectrum, b: float, png: LocalPNG | None = None, galaxy_table=None):
+    """The galaxy target `b(k)^2 P_gal(k)` as a callable of k. `spectrum` is the
+    linear table and sets M(k); `galaxy_table` (e.g. halofit) is `P_gal`, None =
+    `spectrum`. With `png` None or `f_nl == 0` it is exactly `b * b * P_gal(k)`, the
+    f_NL-free expression, so that path is bitwise unchanged."""
+    target = spectrum if galaxy_table is None else galaxy_table
     if png is None or png.f_nl == 0:
-        return lambda k: b * b * spectrum(k)
+        return lambda k: b * b * target(k)
 
     def P_g(k):
         k = np.asarray(k, dtype=np.float64)
-        return (b + delta_b(k, b, spectrum, png)) ** 2 * spectrum(k)
+        return (b + delta_b(k, b, spectrum, png)) ** 2 * target(k)
 
     return P_g
 

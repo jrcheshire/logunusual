@@ -66,6 +66,9 @@ class Bin:
     b: float
     f: float  # growth rate as used by prod_v2 (see module docstring)
     pk_file: str = ""  # input P(k) TSV name (relative to the run's pk_dir)
+    # nonlinear galaxy-target table (same dir); empty = `pk_file`, which stays the
+    # linear table behind the matter field, the velocities and M(k)
+    pk_galaxy_file: str = ""
 
     def __post_init__(self):
         if not self.pk_file:

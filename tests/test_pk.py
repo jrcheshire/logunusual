@@ -159,3 +159,22 @@ def test_grid_pkG_jax_and_numpy_agree(spectrum):
     b, db = pk.grid_pkG(pgrid, box, jnp)
     assert np.allclose(a, np.asarray(b), rtol=1e-12, atol=1e-12 * a.max())
     assert da["n_clipped"] == db["n_clipped"]
+
+
+def test_table_pair_check(spectrum):
+    # bound k0^2 sigma_v^2 from the linear table: 1.345e-7 for this z = 0.9 table
+    # (kh <= 1; 1.38e-7 from the kmax-10 table); measured |P_halofit / P_lin - 1| = 0
+    # at k0 on all seven v28 pairs, and 0.17-0.35 for a pair one bin apart in z
+    k, P = spectrum.k, spectrum.P
+    bound = k[0] ** 2 * np.trapezoid(P, k) / (6 * np.pi**2)
+    assert bound == pytest.approx(1.345e-7, rel=1e-3)
+    assert pk.check_table_pair(spectrum, spectrum) == 0.0
+    damped = pk.PowerSpectrum(k, P * (1 + (k / 0.5) ** 2))  # 4e-8 at k0
+    assert 0 < pk.check_table_pair(spectrum, damped) < bound
+    inside = pk.PowerSpectrum(k, P * (1 + 0.5 * bound))
+    assert pk.check_table_pair(spectrum, inside) == pytest.approx(0.5 * bound)
+    for f in (1 + 2 * bound, 1 - 2 * bound, 0.8):
+        with pytest.raises(ValueError, match="not the same z"):
+            pk.check_table_pair(spectrum, pk.PowerSpectrum(k, P * f))
+    with pytest.raises(ValueError, match="different k"):
+        pk.check_table_pair(spectrum, pk.PowerSpectrum(k[1:], P[1:]))

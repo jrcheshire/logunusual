@@ -20,6 +20,7 @@ scale-dependent galaxy bias). See `ROADMAP.md` for milestones and gates and
 pixi install          # conda env (default + gpu, one solve-group)
 pixi run setup        # once: pinned CPU JAX + editable install (gives the `logunusual` command)
 pixi run test         # pytest (fast tests + slow statistical gates)
+pixi install -e tables   # optional, osx-arm64: CAMB, for making P(k) tables
 ```
 
 On a CUDA machine: `pixi install` then `pixi run -e gpu setup-gpu`, and use
@@ -54,6 +55,14 @@ cannot reach every target: where b(k) falls toward zero at low k (f_NL < 0 on la
 boxes) the run raises rather than write a catalog whose large-scale power is off the
 target. Positive f_NL up to 100 runs on every default bin.
 
+A bin may name a second table, `pk_galaxy_file` (e.g. halofit), for the galaxy target
+only; `pk_file` stays the linear table behind the matter field, the velocities and
+M(k). The run checks at load that the two tables agree at their lowest k node (same z
+and cosmology). `configs/v28_halofit_2x.yaml` is the example: Takahashi halofit on
+grids twice the default. The tables come from
+`pixi run -e tables pk-tables make --model {linear,halofit}` (CAMB, kh 1e-4 to 10;
+`pk-tables check` regenerates the default linear tables byte for byte).
+
 Output: `<output_dir>/<run_name>/realization_NNNNN/catalog.parq` with columns
 `x, y, z` (float64, Mpc/h, observer at the origin, redshift space) and `bin` (int8),
 bins ascending, row groups pinned at 2^20 rows and never mixing bins, provenance in
@@ -69,8 +78,10 @@ prints the realized density per bin.
 - `logunusual/fnl.py` -- the local-f_NL scale-dependent bias.
 - `logunusual/{validate,gates}.py` -- estimators and statistical gates.
 - `scripts/m1_*.py`, `scripts/m2_gates.py`, `scripts/m3_device.py`,
-  `scripts/m4_fnl.py` -- gate tables, reproducibility, memory, device timing, f_NL
-  attainability.
+  `scripts/m4_fnl.py` -- gate tables, reproducibility, memory, device timing,
+  attainability (f_NL, halofit, grid scale).
+- `scripts/make_pk_tables.py` -- the input P(k) tables (CAMB linear / halofit; `tables`
+  env).
 - `docs/landscape.md` -- literature and code landscape.
 - `ROADMAP.md` -- master plan with acceptance gates per milestone.
 

@@ -108,6 +108,10 @@ class RunConfig:
     def pk_path(self, b: suite.Bin) -> Path:
         return self.pk_dir / b.pk_file
 
+    def pk_galaxy_path(self, b: suite.Bin) -> Path:
+        """The galaxy-target table; `pk_path(b)` when the bin names none."""
+        return self.pk_dir / (b.pk_galaxy_file or b.pk_file)
+
     def bins_by_index(self, indices=None):
         if indices is None:
             return self.bins
@@ -140,14 +144,14 @@ class RunConfig:
             "f_nl": self.f_nl,
             "fnl_p": self.fnl_p,
             "primordial": dict(self.primordial),
-            "bins": [asdict(b) for b in self.bins],
+            "bins": [_bin_dict(b) for b in self.bins],
         }
         return d
 
     def hash_dict(self) -> dict:
         """What the config hash covers: everything but names and machine paths. The
-        f_NL keys enter only when f_NL != 0, so a Gaussian config hashes as it did
-        before they existed."""
+        f_NL keys enter only when f_NL != 0, and a bin's `pk_galaxy_file` only when set,
+        so a Gaussian single-table config hashes as it did before they existed."""
         d = self.to_dict()
         for k in ("run_name", "output_dir", "pk_dir", "mask", "n_workers"):
             d.pop(k)
@@ -218,11 +222,21 @@ class RunConfig:
         return yaml.safe_dump(self.to_dict(), sort_keys=False, default_flow_style=None)
 
 
+def _bin_dict(b: suite.Bin) -> dict:
+    """`asdict(b)` without an empty `pk_galaxy_file`, so a single-table bin
+    serialises and hashes as it did before the field existed."""
+    d = asdict(b)
+    if not d["pk_galaxy_file"]:
+        d.pop("pk_galaxy_file")
+    return d
+
+
 def _bin_from_dict(x: dict) -> suite.Bin:
     unknown = set(x) - set(BIN_FIELDS)
     if unknown:
         raise ValueError(f"unknown bin keys {sorted(unknown)}; fields are {BIN_FIELDS}")
-    missing = [k for k in BIN_FIELDS if k not in x and k != "pk_file"]
+    optional = ("pk_file", "pk_galaxy_file")
+    missing = [k for k in BIN_FIELDS if k not in x and k not in optional]
     if missing:
         raise ValueError(f"bin {x.get('name', '?')} misses {missing}")
     return suite.Bin(**x)

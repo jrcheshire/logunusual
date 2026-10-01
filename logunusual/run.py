@@ -19,7 +19,7 @@ import numpy as np  # noqa: E402
 
 from . import __version__, field, fnl, io, sample, suite  # noqa: E402
 from .config import RunConfig  # noqa: E402
-from .pk import PowerSpectrum  # noqa: E402
+from .pk import PowerSpectrum, check_table_pair  # noqa: E402
 from .shell import AngularMask, sample_shell  # noqa: E402
 
 
@@ -54,6 +54,7 @@ def plan_realization(cfg: RunConfig, realization: int, bins=None):
                 "b": b.b,
                 "f": b.f,
                 "pk": str(cfg.pk_path(b)),
+                "pk_galaxy": str(cfg.pk_galaxy_path(b)),
                 "seed": seed,
                 "ic_seed": ic,
                 "draw_seed": draw,
@@ -165,6 +166,10 @@ def generate_realization(
             box, shell = cfg.box(b), cfg.shell(b)
             shell.check_box(box)
             spectrum = PowerSpectrum.from_tsv(cfg.pk_path(b))
+            galaxy_table = None
+            if b.pk_galaxy_file:
+                galaxy_table = PowerSpectrum.from_tsv(cfg.pk_galaxy_path(b))
+                check_table_pair(spectrum, galaxy_table)
             seed = suite.seed_for(realization, b.index, cfg.seed_base)
             ic, draw = sample.split_seed(seed)
             log(
@@ -186,6 +191,7 @@ def generate_realization(
                 jitter_p=cfg.jitter_p,
                 psi_axes="xyz",
                 fnl=png,
+                galaxy_table=galaxy_table,
                 trace=trace,
             )
             t1 = time.perf_counter()
@@ -240,6 +246,10 @@ def generate_realization(
                 "draw_seed": draw,
                 "pk_file": b.pk_file,
                 "pk_sha256": spectrum.file_hash,
+                "pk_galaxy_file": b.pk_galaxy_file or b.pk_file,
+                "pk_galaxy_sha256": (
+                    spectrum if galaxy_table is None else galaxy_table
+                ).file_hash,
                 "sigma2_galaxy": diag["galaxy"]["sigma2"],
                 "sigma2_matter": diag["matter"]["sigma2"],
                 "xi_min_galaxy": diag["galaxy"]["xi_min"],

@@ -770,8 +770,9 @@ in the emufab env; linux-aarch64 has no 1.5.9). Cosmology and call sequence are
 `make_matter_power.py`'s (Planck 2018, `delta_tot`). Nonlinear: CAMB
 `halofit_version = "takahashi"` (Takahashi et al. 2012, JC). CAMB's implementation
 carries the Bird et al. 2012 massive-neutrino terms (`fnu = omnuh2 / omm0` in `beta`,
-the halo term and `plinaa`; read in CAMB's `halofit.f90`) and applies the correction
-only above `Min_kh_nonlinear` = 0.005 h/Mpc. New tables run kh 1e-4 to 10 at 12501
+the halo term and `plinaa`; read in the CAMB 1.6.1 `halofit.f90` source, the env runs
+the 1.5.9 binary) and applies the correction only above `Min_kh_nonlinear` = 0.005
+h/Mpc. New tables run kh 1e-4 to 10 at 12501
 nodes (the v28 tables' 2500 per decade):
 `matterpower_camb_{lin,halofit}_kmax10_zeff={z}.tsv`. The 2x grids' corners reach
 k = 1.39 (bin 1), past the v28 tables' kh = 1.
@@ -784,7 +785,7 @@ k = 1.39 (bin 1), past the v28 tables' kh = 1.
 | check | statistic | where |
 |---|---|---|
 | P1 | the table script regenerates the seven v28 linear tables (kh 1e-4 to 1, 10001 nodes) byte for byte; otherwise the max relative difference is reported and nothing proceeds | `make_pk_tables.py --check`, recorded here |
-| pair | `pk.check_table_pair`: a common lowest k node, and `P_gal / P_lin` there within a bound measured on the seven v28 pairs; a z-mismatched pair (adjacent bins) fails by > 10x the bound. Called at load in `run.py` | fast, `tests/test_pk.py` |
+| pair | `pk.check_table_pair`: a common lowest k node, and `|P_gal / P_lin - 1|` there within `k0^2 sigma_v^2` (the leading low-k nonlinear correction, `P_13 -> -k^2 sigma_v^2 P_lin`, from the linear table; JC); a z-mismatched pair (adjacent bins) fails by > 10x the bound. Called at load in `run.py` | fast, `tests/test_pk.py` |
 | wiring | `pk_galaxy_file == pk_file` is bitwise the single-table stage; with distinct tables `delta_m` / `psi` are bitwise the linear run's and `delta_g` the single-table run's on the galaxy table; with f_NL the target is exactly `(b + delta_b_lin)^2 P_gal` | fast, `tests/test_field.py`, `tests/test_fnl.py` |
 | G15 | G3's grid identity with the halofit galaxy target at a 2x cell (128^3, L 625, dx 4.9, bin-5 b, z 0.9), every band to the Nyquist, SE <= 2%/3 | slow |
 | G16 | the same identity for the linear matter target at that geometry (folded into G15's run) | slow |
@@ -798,6 +799,31 @@ matter `xi_min`, sigma^2, clipped P_G modes and power fraction; the M4 f_NL set)
 one 2x realization per bin (wall, peak RSS, `psi_max` against the 150 Mpc/h buffer).
 GPU f64 at 1024^3 (~96 GiB allocator peak) does not fit a GH200; f32 (~48) would, but
 f32 is not a `RunConfig` field. Reported, not decided here.
+
+**Tables and pair check, measured (2026-10-01, laptop, one thread).** P1: the seven v28
+linear tables regenerate **byte-identical** (26 s). New tables, sha256 (first 12):
+
+| z_eff | `lin_kmax10` | `halofit_kmax10` |
+|---|---|---|
+| 0.1 | `a08066113c62` | `687d36c376a2` |
+| 0.3 | `dd20362d66a8` | `9ea62c1e185c` |
+| 0.5 | `3e2322a0608e` | `edf1498ee704` |
+| 0.7 | `f53b20da5460` | `7a373f25ba5e` |
+| 0.9 | `0b9487771d36` | `278319d961be` |
+| 1.3 | `f6f3d72f4f9b` | `93e4dce6e15b` |
+| 1.9 | `1e3cde868f1a` | `ae46a116a81c` |
+
+- `P_halofit / P_lin - 1` at k0 = 1e-4 is **exactly 0** on all seven pairs; a pair one
+  bin apart in z is off by -0.17 to -0.35. The bound `k0^2 sigma_v^2` is 6.4e-8 (z
+  1.9, sigma_v 2.52 Mpc/h) to 3.1e-7 (z 0.1, 5.54), so a mismatch fails by ~10^6x.
+- The kh-10 linear tables have the v28 nodes exactly (|dk/k| = 0) and differ from the
+  v28 tables by up to 1.2e-5 in P (7.5e-6 below k = 0.1); the two CAMB calls differ
+  only in `kmax` (2 vs 20 /Mpc) and the output range. That is above the pair bound, so
+  a halofit table pairs with the kh-10 linear one only.
+- Halofit / linear at the 2x Nyquist: 4.16 (bin 1, k 0.80), 2.82, 2.75, 2.26, 2.13
+  (bin 5, k 0.64), 1.45, 1.24 (bin 7, k 0.40). Below k = 0.005 (CAMB's
+  `Min_kh_nonlinear`) the ratio still departs from 1, by at most 5.9e-4 (z 0.1);
+  not investigated.
 
 ## M5 -- Ensemble production
 

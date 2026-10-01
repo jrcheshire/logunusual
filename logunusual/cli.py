@@ -43,6 +43,11 @@ def cmd_run(args):
                     f"nbar={row['nbar_target']:.4g} seed={row['seed']} "
                     f"expected full-sky kept ~{row['expected_kept_fullsky']:.3g} "
                     f"pk={row['pk']}"
+                    + (
+                        ""
+                        if row["pk_galaxy"] == row["pk"]
+                        else f" pk_galaxy={row['pk_galaxy']}"
+                    )
                 )
         return 0
     for r in args.realizations:

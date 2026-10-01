@@ -1,15 +1,21 @@
 """M4 f_NL measurements; writes `runs/m4/<mode>_<stamp>.json`.
 
     pixi run python scripts/m4_fnl.py attain [--fnl -100 -10 -1 1 10 100] [--bins 1 7]
+        [--grid-scale 2] [--pk-template NAME] [--pk-galaxy-template NAME]
 
-`attain`: for every v28 bin at its production grid, the galaxy target `b(k)^2 P /
-sinc^2` through the grid-native P -> P_G conversion (the field stage's own call, no
-sampling): `xi_min`, sigma^2, clipped P_G modes and their power fraction, and what the
-bias does on the box (`b(k_f) / b`, the k where b(k) changes sign). f_NL = 0 is the
-reference row.
+`attain`: for every v28 bin at its production grid (times `--grid-scale`, rounded as
+`RunConfig.effective_bin` does), the galaxy target `b(k)^2 P_gal / sinc^2` through the
+grid-native P -> P_G conversion (the field stage's own call, no sampling): `xi_min`,
+sigma^2, clipped P_G modes and their power fraction, and what the bias does on the box
+(`b(k_f) / b`, the k where b(k) changes sign). f_NL = 0 is the reference row; one
+`matter` row per bin is the linear target `P / sinc^2`. Tables: `--pk-template` names
+the linear table and `--pk-galaxy-template` the galaxy one (`{z:g}` is the bin's
+z_eff; defaults: the bin's `pk_file`, and the linear table), checked as a pair by
+`pk.check_table_pair` as the driver does.
 """
 
 import argparse
+import dataclasses
 import datetime as dt
 import json
 import os
@@ -21,30 +27,60 @@ os.environ.setdefault("JAX_ENABLE_X64", "1")
 
 import jax.numpy as jnp  # noqa: E402
 
-from logunusual import field, fnl, suite  # noqa: E402
-from logunusual.grid import Box  # noqa: E402
-from logunusual.pk import PowerSpectrum, grid_pkG  # noqa: E402
+from logunusual import config, field, fnl, suite  # noqa: E402
+from logunusual.pk import PowerSpectrum, check_table_pair, grid_pkG  # noqa: E402
 
 
 def attain(args):
     rows = []
     bins = [b for b in suite.BIN_SUITE_V28 if b.index in args.bins]
+    cfg = dataclasses.replace(config.default_config(), grid_scale=args.grid_scale)
+    pk_dir = Path(args.pk_dir)
     for b in bins:
-        box = Box(b.N_grid, float(b.L_box))
-        spectrum = PowerSpectrum.from_tsv(Path(args.pk_dir) / b.pk_file)
-        print(f"{b.name}: N = {b.N_grid}, L = {b.L_box}, b = {b.b}, z_eff = {b.z_eff}")
+        box = cfg.box(b)
+        lin_name = args.pk_template.format(z=b.z_eff) if args.pk_template else b.pk_file
+        spectrum = PowerSpectrum.from_tsv(pk_dir / lin_name)
+        gal_name = lin_name
+        galaxy_table = None
+        if args.pk_galaxy_template:
+            gal_name = args.pk_galaxy_template.format(z=b.z_eff)
+            galaxy_table = PowerSpectrum.from_tsv(pk_dir / gal_name)
+            check_table_pair(spectrum, galaxy_table)
+        print(
+            f"{b.name}: N = {box.n_mesh}, L = {b.L_box}, dx = {box.dx:.3f}, "
+            f"b = {b.b}, z_eff = {b.z_eff}, linear {lin_name}, galaxy {gal_name}"
+        )
+        base = {
+            "bin": b.index,
+            "N": box.n_mesh,
+            "L": b.L_box,
+            "b": b.b,
+            "pk_file": lin_name,
+            "pk_galaxy_file": gal_name,
+        }
+        t0 = time.perf_counter()
+        target = field.target_on_grid(spectrum, box, 1)
+        _, diag = grid_pkG(jnp.asarray(target), box, jnp)
+        del target, _  # free the grids before the next row (1024^3)
+        rows.append(
+            {**base, "field": "matter", **diag, "t_s": time.perf_counter() - t0}
+        )
+        print(
+            f"  matter           xi_min {diag['xi_min']:+.3e}  "
+            f"sigma2 {diag['sigma2']:.4f}  clipped {diag['n_clipped']:>9,} "
+            f"({diag['clipped_power_fraction']:.2e})"
+        )
         for f_nl in [0.0] + list(args.fnl):
             png = None if f_nl == 0 else fnl.LocalPNG(f_nl=f_nl)
             t0 = time.perf_counter()
             target = field.target_on_grid(
-                fnl.galaxy_spectrum(spectrum, b.b, png), box, 1
+                fnl.galaxy_spectrum(spectrum, b.b, png, galaxy_table), box, 1
             )
             _, diag = grid_pkG(jnp.asarray(target), box, jnp)
+            del target, _
             row = {
-                "bin": b.index,
-                "N": b.N_grid,
-                "L": b.L_box,
-                "b": b.b,
+                **base,
+                "field": "galaxy",
                 "f_nl": f_nl,
                 **diag,
                 **(
@@ -70,7 +106,10 @@ def main():
     ap.add_argument("mode", choices=["attain"])
     ap.add_argument("--fnl", type=float, nargs="+", default=[-100, -10, -1, 1, 10, 100])
     ap.add_argument("--bins", type=int, nargs="+", default=list(range(1, 8)))
+    ap.add_argument("--grid-scale", type=float, default=1.0)
     ap.add_argument("--pk-dir", default="data")
+    ap.add_argument("--pk-template", default=None)
+    ap.add_argument("--pk-galaxy-template", default=None)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     t0 = time.perf_counter()
