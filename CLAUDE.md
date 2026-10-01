@@ -259,7 +259,8 @@ them in both directions (G10).
   2026-09-15/16 on deneb's RTX 3050 and a Vista GH200, the field stage's allocator peak
   is **12.0 x N^3 float64 at every production grid** (192^3 to 512^3; 12.03 GiB at
   512^3), against 7.5x live. **The allocator peak decides whether a grid fits; the live
-  count does not.** `scripts/m3_device.py` reports both.
+  count does not.** `scripts/m3_device.py` reports both. On the GH200 f32 halves the
+  allocator peak (6.02x) and jit takes 2.0x off f64 (10.02x); f32 + jit is 5.07x.
   The poller is also a sampling instrument with ~10% run-to-run spread, so it cannot
   settle a percent-level question on its own.
 - Where the time went in the Julia reference (bin 5, 512^3, laptop): field 8 s, draw
@@ -322,8 +323,11 @@ them in both directions (G10).
   spline, which puts 45% of the whole field stage where no accelerator reaches it and
   explains the GH200's 1.2x. A real `dtype` knob replaced the f32 probe (live arrays
   exactly halve); `jit` is in and is not bitwise, and buys nothing on the laptop.
-  **Still owed:** seven-bin re-measurement on the laptop and Vista; the ALLOCATOR
-  peaks (f64/f32 x eager/jit), which only a GPU reports and which decide what fits a
-  card.
+- **M3 allocator peaks DONE (2026-09-22, Vista job 1014508):** at 512^3, x N^3 f64:
+  f64 eager 12.03, f64 jit 10.02, f32 eager 6.02 (exactly half), f32 jit 5.07. On the
+  node the P -> P_G conversion is 98% host and the spline alone is 4.5 of the 6.27 s
+  stage; jit's 512^3 wall is 0.93x eager. Fits on deneb are predictions from the
+  GH200 table, not measured (`ROADMAP.md` M3).
+  **Still owed:** seven-bin re-measurement on the laptop and Vista.
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.

@@ -407,6 +407,7 @@ is the one that decides a fit: XLA intra-op scratch added 50-60% on top in f64 a
 nothing says it halves. That needs one short GPU ladder run; until then the f64 table
 above is the only statement about what fits a card. `probe_field_arrays` and its
 self-check machinery are deleted -- `--dtype f32` now runs the shipped stage.
+(Measured 2026-09-22, job 1014508, below: the f32 allocator peak is half the f64 one.)
 
 ### `jax.jit` of the field stage, and the bitwise check (2026-09-21)
 
@@ -435,7 +436,9 @@ bin02, identical eager and jit, both dtypes). The peak that would move is XLA's
 intra-op scratch, which added 50-60% on top in the deneb f64 table, and **a CPU
 backend has no allocator to report it**. That is the one open question jit leaves, and
 it is the same run the f32 allocator question needs: one short GPU `ladder` over
-f64/f32 x eager/jit. `ladder --jit` is in the instrument for it.
+f64/f32 x eager/jit. `ladder --jit` is in the instrument for it. (Measured 2026-09-22,
+job 1014508, below: jit takes 2.0 x N^3 f64 off the f64 allocator peak, and is 0.93x
+eager on the 512^3 wall.)
 
 The k grid does NOT get baked into the executable as a constant, which was the risk of
 making `box` static: at 512^3 `displacement_jit`'s `memory_analysis` reports
@@ -468,11 +471,66 @@ super-Gaussian scatter, both pushing the same way.
 
 G4a now uses the same bands as G11, so the two gates stay comparable.
 
+### Allocator peaks f64/f32 x eager/jit, on a Vista GH200 (2026-09-22, job 1014508, commit `00d0344`)
+
+`scripts/m3_vista_alloc.sbatch`, partition `gh`, 72 affinity cores, allocator limit
+71.25 GiB; log `logunusual-m3-alloc-1014508.log`, JSON `runs/m3/vista_alloc_*.json`.
+The device check and the dtype check (the f32 leg returns float32 from `cuda:0`) passed
+first; every phase rc 0. One ladder point per process, so each peak is its own.
+
+**Device allocator peak, x N^3 float64** (GiB at 512^3 in brackets):
+
+| bin | N | f64 eager | f64 jit | f32 eager | f32 jit |
+|---|---|---|---|---|---|
+| bin01 | 192 | 12.59 | 10.05 | 6.30 | 5.03 |
+| bin02 | 256 | 12.57 | 10.04 | 6.29 | 5.02 |
+| bin03 | 384 | 12.04 | 10.03 | 6.28 | 5.02 |
+| bin04 | 448 | 12.04 | 10.02 | 6.02 | 5.08 |
+| bin05 | 512 | 12.03 (12.03) | 10.02 (10.02) | 6.02 (6.02) | 5.07 (5.07) |
+
+- **float32 halves the allocator peak**, scratch included: 0.500 of f64 at 448^3 and
+  512^3 (0.52 at 384^3).
+- **jit takes 2.0 x N^3 f64 off the f64 peak** (12.03 -> 10.02 at 512^3, 0.83x) and
+  ~1 x N^3 off the f32 one; f32 + jit is 0.42 of f64 eager at 512^3.
+- f64 eager at 384^3-512^3 reproduces job 999776 to four digits. At 192^3 and 256^3 it
+  reads 12.59 / 12.57 against 999776's 12.09 / 12.07 (+0.5 x N^3, ~4%); not
+  investigated -- it is a small-grid term and changes no fit. The live-array column
+  (7.5-8.5x f64 eager in both jobs) moves between runs by up to 1 x N^3 at the same
+  grid, which is the poller's known spread.
+
+**What fits.** On this card, every arm at every grid, with >5x headroom; the "512^3
+bin under 15 GB" target is met by f64 eager (12.03 GiB). For deneb's RTX 3050 the
+table gives a PREDICTION, not a measurement -- deneb read 11.27x at 384^3 where this
+card reads 12.04x, so the scratch term is card-dependent: at 512^3 only f32 + jit
+(5.07 GiB) comes under the 5.38 GiB limit at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`,
+by 6%; nothing at 512^3 comes under the default 4.25 GiB. 448^3 f32 eager (4.03 GiB)
+is under 4.25 by 5%.
+
+**The P -> P_G split on Grace (`pkg`, median of 5, both arms BITWISE against the
+shipped call, diagnostics identical):**
+
+| | 256^3 laptop | 256^3 GH200 | 512^3 laptop | 512^3 GH200 |
+|---|---|---|---|---|
+| conversion (pkG_g) | 0.38 s | 0.34 s | 2.82 s | 2.57 s |
+| host | 64% | 97.3% | 65.5% | 98.0% |
+| spline alone | 0.22 s | 0.29 s | 1.67 s | 2.25 s |
+| device | 0.12 s | 0.004 s | 0.88 s | 0.014 s |
+
+On the node the device half of the conversion is 30-60x faster than the laptop's and
+is now ~1% of it; the spline runs 1.3x SLOWER on one Grace core than on the M4 Max.
+At 512^3 the two conversions' host work is 5.0 s of the 6.27 s unblocked field stage
+(spline alone 4.5 s), measured on the node rather than scaled from the laptop. **The
+GH200's ~1.2x is the host spline**, and the spline is now the largest single piece of
+the GPU field stage.
+
+**512^3 wall, eager vs jit (`wall`, one run each):** unblocked 6.27 s eager, 5.81 s
+jit (0.93x; eager's unblocked spread across jobs 999776 / 1014508 is 6.27-6.39 s).
+The gain is on the device steps (delta_g 0.31 -> 0.10 s blocked); the conversions do
+not move (3.16 / 2.63 s eager, 3.16 / 2.62 jit). The blocked jit leg includes its own
+512^3 compile (the N = 32 warm-up compiles a different shape); the unblocked leg reuses it.
+
 **Still owed by M3:** the seven-bin re-measurement on the laptop (against 187 s /
-15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s); and the
-ALLOCATOR peaks that the laptop cannot report -- f64/f32 x eager/jit in one short GPU
-`ladder` run, which is what decides whether f32 or fusion makes a 512^3 bin fit a
-card.
+15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s).
 
 ## M4 -- Physics upgrades (each opens its own plan session)
 
