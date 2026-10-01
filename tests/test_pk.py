@@ -33,6 +33,33 @@ def test_spline_extrapolates_as_power_laws(spectrum):
     assert np.allclose(spectrum.scaled(4.0)(k), 4.0 * P)
 
 
+@pytest.mark.parametrize("n, L", [(16, 160.0), (32, 320.0), (64, 640.0), (64, 1000.0)])
+@pytest.mark.parametrize("bias", [1.0, 1.76])
+def test_pk_on_grid_table_matches_direct_evaluation(spectrum, n, L, bias):
+    # `pk_on_grid` gathers a per-radius table; the reference evaluates the spectrum on
+    # `k_grid`'s |k|. The index must be exact, and P may move only by rounding:
+    # slope_max * |dk/k| (the two |k| constructions, measured here; <= 2 eps) plus
+    # 4 ulp of max |ln P| (P = exp(spline(ln k)): each side's spline + exp rounds by
+    # ~2 ulp of ln P). Measured 9 eps on every v28 table against a bound of ~37.
+    box = Box(n, L)
+    sp = lambda k: bias * bias * spectrum(k)  # noqa: E731
+    _, _, kmag = k_grid(box)
+    q = pk.radius_index(box)
+    assert q.dtype == np.int32
+    assert np.array_equal(q, np.rint((kmag / box.k_f) ** 2).astype(np.int32))
+
+    m = kmag > 0
+    dk = np.abs(box.k_f * np.sqrt(q[m].astype(np.float64)) / kmag[m] - 1).max()
+    kk = np.geomspace(kmag[m].min(), kmag.max(), 4001)
+    slope = np.abs(np.gradient(np.log(sp(kk)), np.log(kk))).max()
+    direct = sp(kmag)
+    tol = slope * dk + 4 * np.spacing(np.abs(np.log(direct[m])).max())
+
+    P = pk.pk_on_grid(sp, box)
+    assert P[0, 0, 0] == 0.0
+    assert np.abs(P[m] / direct[m] - 1).max() <= tol
+
+
 def _gaussian_pair(A, R):
     """xi(r) = A exp(-r^2 / 2R^2)  <->  P(k) = A (2pi)^{3/2} R^3 exp(-k^2 R^2 / 2)."""
     P = (

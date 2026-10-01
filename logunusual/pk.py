@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 from scipy.interpolate import CubicSpline
 
-from .grid import Box, k_grid
+from .grid import Box
 
 
 def load_pk_tsv(path):
@@ -83,11 +83,26 @@ class PowerSpectrum:
         return out
 
 
+def radius_index(box: Box) -> np.ndarray:
+    """`i^2 + j^2 + l^2` (int32) on the rfft grid, the integer mode indices in
+    `fftfreq` / `rfftfreq` order, so `|k| = k_f sqrt(radius_index)`."""
+    n = box.n_mesh
+    i = np.arange(n, dtype=np.int32)
+    i2 = np.where(i < n // 2, i, i - n) ** 2
+    l2 = np.arange(n // 2 + 1, dtype=np.int32) ** 2
+    return i2[:, None, None] + i2[None, :, None] + l2[None, None, :]
+
+
 def pk_on_grid(spectrum, box: Box):
     """Evaluate `spectrum(|k|)` on the rfft grid; DC set to 0. `spectrum` is any
-    callable of k (h/Mpc) returning (Mpc/h)^3."""
-    _, _, k_mag = k_grid(box)
-    P = np.asarray(spectrum(k_mag), dtype=np.float64)
+    callable of k (h/Mpc) returning (Mpc/h)^3.
+
+    `spectrum` is called once on `k_f sqrt(q)` for every integer `q <= 3 (N/2)^2` and
+    gathered by `radius_index`. Not bitwise against `spectrum(k_grid(box)[2])`: the two
+    `|k|` constructions round differently (<= 2 eps), so P moves by ~1e-15 relative."""
+    n2 = box.n_mesh // 2
+    table = spectrum(box.k_f * np.sqrt(np.arange(3 * n2 * n2 + 1, dtype=np.float64)))
+    P = np.asarray(table, dtype=np.float64)[radius_index(box)]
     P[0, 0, 0] = 0.0
     return P
 

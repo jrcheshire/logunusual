@@ -392,10 +392,11 @@ def run_pkg(args):
     device syncs.
 
     The pieces are the REAL library calls in the order `field.generate_fields` makes
-    them, not a mirror of them: `pk_on_grid`, `jitter_power_window`, `grid_xi`,
-    `grid_pk_from_xi` are each timed where they are called. The assembled result is
-    then compared bitwise against `grid_pkG(target_on_grid(...))` in the same process,
-    so a split that has drifted from the shipped path cannot be reported as one.
+    them: `radius_index`, `pk_on_grid`'s table + gather, `jitter_power_window`,
+    `grid_xi`, `grid_pk_from_xi` are each timed where they are called. The assembled
+    result is then compared bitwise against `grid_pkG(target_on_grid(...))` in the
+    same process, so a split that has drifted from the shipped path cannot be reported
+    as one.
     """
     import time
 
@@ -403,8 +404,14 @@ def run_pkg(args):
     import jax.numpy as jnp
 
     from logunusual import field, suite
-    from logunusual.grid import Box, jitter_power_window, k_grid
-    from logunusual.pk import PowerSpectrum, grid_pk_from_xi, grid_xi, grid_pkG
+    from logunusual.grid import Box, jitter_power_window
+    from logunusual.pk import (
+        PowerSpectrum,
+        grid_pk_from_xi,
+        grid_xi,
+        grid_pkG,
+        radius_index,
+    )
 
     b = {x.name: x for x in suite.BIN_SUITE_V28}[args.bin]
     pk_file = args.pk or resolve_pk(b)
@@ -435,12 +442,16 @@ def run_pkg(args):
             t[0] = now
 
         # --- host: field.target_on_grid == pk_on_grid / jitter_power_window
-        _, _, k_mag = k_grid(box)
-        mark("k_grid", "host")
-        P = np.asarray(target(k_mag), dtype=np.float64)
+        q = radius_index(box)
+        mark("radius_index", "host")
+        n2 = box.n_mesh // 2
+        table = target(box.k_f * np.sqrt(np.arange(3 * n2 * n2 + 1, dtype=np.float64)))
+        table = np.asarray(table, dtype=np.float64)
+        mark("spline_table", "host")
+        P = table[q]
         P[0, 0, 0] = 0.0
-        mark("spline_eval", "host")
-        del k_mag
+        mark("gather", "host")
+        del q, table
         if jitter_p:
             W = jitter_power_window(box, jitter_p)
             mark("jitter_window", "host")

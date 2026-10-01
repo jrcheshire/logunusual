@@ -351,7 +351,8 @@ so the GH200's 3.30 s / 2.61 s conversions are consistent with being almost enti
 host-bound. That last step is arithmetic across two machines, not a controlled
 measurement; the split itself is measured.
 
-**Headroom, measured, NOT implemented (a decision, not a build).** `|k|^2` on the rfft
+**Headroom, measured here; adopted 2026-09-30 (see "The spline as a per-radius table"
+below).** `|k|^2` on the rfft
 grid is `k_f^2 (i^2 + j^2 + l^2)` with the integer bounded by `3 (N/2)^2`, so the
 spline can be tabulated once on every attainable radius and gathered with the integer
 as the index -- no sort. Probed at 256^3 and 512^3: **11.7x on the spline piece at
@@ -528,6 +529,43 @@ jit (0.93x; eager's unblocked spread across jobs 999776 / 1014508 is 6.27-6.39 s
 The gain is on the device steps (delta_g 0.31 -> 0.10 s blocked); the conversions do
 not move (3.16 / 2.63 s eager, 3.16 / 2.62 jit). The blocked jit leg includes its own
 512^3 compile (the N = 32 warm-up compiles a different shape); the unblocked leg reuses it.
+
+### The spline as a per-radius table (2026-09-30)
+
+`pk_on_grid` now calls the spectrum once on `k_f sqrt(q)` for every integer
+`q <= 3 (N/2)^2` and gathers by `pk.radius_index` (`i^2 + j^2 + l^2`, int32, in
+`fftfreq` / `rfftfreq` order). It takes any callable of `|k|`, as before, so both field
+conversions and the gate predictions in `gates.py` use it. It is **not bitwise**
+against evaluating on `k_grid`'s `|k|`, so every catalog changes, at the last bit;
+nothing in the catalog records the scheme (decided 2026-09-30).
+
+**Gate (`tests/test_pk.py`, derived, not picked).** The index must equal
+`rint((|k| / k_f)^2)` exactly. The two `|k|` constructions differ by <= 2 eps at
+every size measured (N = 16-256, `|dk/k|` max 2.00 eps, p99 1.0-1.5); every v28 table
+has `max |dlnP/dlnk|` = 2.38 over its grid's k range. P = exp(spline(ln k)), so beyond
+the slope term each side rounds by ~2 ulp of ln P (ln P ~ 10, whose ulp is 8 eps in P).
+Bound: `slope_max * |dk/k| + 4 ulp(max |ln P|)`, ~37 eps (8.2e-15) at (32, 320).
+Measured: **max 9 eps, median 0, 13-16% of cells moved**, on bin01 and bin02 with
+their own tables. Mutations fail it: an off-by-one radius by 0.15, `k_f (1 + 1e-6)`
+by 2.4e-6. `m3_device.py pkg` times `radius_index` / `spline_table` / `gather` in
+place of `k_grid` / `spline_eval` and stays BITWISE against the shipped call.
+`m1_reproducibility --n 64` IDENTICAL.
+
+Full suite 99 passed / 0 failed (4:50), `check-format` + `lint` clean.
+
+**Timed on the shipped code (laptop M4 Max, idle, bin05 512^3; JSON
+`runs/m3/pkg_bin05_table.json`, `wall_laptop_bin05_table.json`):**
+
+| | 2026-09-21 (direct) | 2026-09-30 (table) |
+|---|---|---|
+| k magnitude + spectrum on the grid | 0.086 + 1.674 = 1.76 s | 0.023 + 0.003 + 0.117 = 0.14 s (index, table, gather) |
+| one conversion (pkG_g, median of 5) | 2.82 s, host 65.5% | 1.20 s, host 19.2% |
+| field stage, blocked / unblocked | 8.31 / 8.09 s | **5.16 / 4.62 s** |
+
+12.3x on the piece the table replaces, 2.35x on each conversion, 1.6-1.75x on the
+stage (one `wall` run each side). The conversion is now 73% device on the laptop, and
+`irfftn_xi` is still the one bimodal piece (0.16-0.68 s). The GH200 gain is
+unmeasured: the Vista seven-bin re-measurement will carry it.
 
 **Still owed by M3:** the seven-bin re-measurement on the laptop (against 187 s /
 15.04 GiB; the galaxy count is a new draw) and on Vista (against 259 s).

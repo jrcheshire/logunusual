@@ -70,10 +70,12 @@ pixi run lint                # flake8, max-line 88, ignore E203
   constants, distance cosmology. Dependency-free.
 - `grid.py` **[M1]** -- `Box`, k-grids (rfft on z), Hermitian weights, the separable
   `sinc` windows, the CIC shot-noise alias factor (Jing 2005).
-- `pk.py` **[M1]** -- TSV loader + `PowerSpectrum` (log-log cubic spline, power-law
+- `pk.py` **[M1, M3]** -- TSV loader + `PowerSpectrum` (log-log cubic spline, power-law
   tails, `file_hash`), and the **grid-native** `grid_pkG`: `P -> xi -> log1p -> P_G`
   with two FFTs on the simulation grid. Reports `xi_min`, `sigma2`, the clipped
-  negative-`P_G` fraction; raises if `xi <= -1`.
+  negative-`P_G` fraction; raises if `xi <= -1`. `pk_on_grid` evaluates the spectrum
+  once per integer radius `q = i^2 + j^2 + l^2` and gathers by `radius_index` (M3);
+  ~1e-15 relative from evaluating on `k_grid`'s `|k|`, not bitwise.
 - `field.py` **[M1, M2, M3]** -- JAX (eager, x64): white noise (numpy PCG64) ->
   Gaussian -> lognormal galaxy and matter fields -> displacement components
   (`psi_axes`, any subset of "xyz"; `Fields.psi` dict, `psi_flat`). `generate_fields`
@@ -328,6 +330,10 @@ them in both directions (G10).
   node the P -> P_G conversion is 98% host and the spline alone is 4.5 of the 6.27 s
   stage; jit's 512^3 wall is 0.93x eager. Fits on deneb are predictions from the
   GH200 table, not measured (`ROADMAP.md` M3).
+- **M3 spline table ADOPTED (2026-09-30):** `pk_on_grid` gathers a per-radius table
+  (max 9 eps from direct evaluation, gate derived in `tests/test_pk.py`); every
+  catalog changes at the last bit. Laptop 512^3: each conversion 2.82 -> 1.20 s,
+  field stage 8.31 -> 5.16 s blocked (8.09 -> 4.62 unblocked). GH200 gain unmeasured.
   **Still owed:** seven-bin re-measurement on the laptop and Vista.
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.
