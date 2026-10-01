@@ -869,6 +869,26 @@ galaxy P_G clipping, f_NL = 0:
   everywhere (clipped |k| 0.46-0.58). The excess spreads to every k, not only the
   clipped shells.
 
+**One realization per bin on `configs/v28_halofit.yaml`'s grids (2026-10-01, laptop,
+realization 0, fiducial mask): every bin stops at the field-stage buffer guard.**
+`f max|Psi|` (Mpc/h) against the 150 buffer, and the field stage's peak RSS:
+
+| bin | N | f max\|Psi\| | buffer needed | peak RSS |
+|---|---|---|---|---|
+| 1 | 270 | 163.4 | 168.2 | 2.8 GB |
+| 2 | 450 | 187.2 | 192.0 | 9.4 GB |
+| 3 | 720 | 329.9 | 334.1 | 27.6 GB |
+| 4 | 896 | 157.9 | 162.2 | 53.7 GB |
+
+Bins 5-7 (1024^3) not run. The matter field is the linear one, so this is the finer
+grid, not halofit. Bin 3, realization 0's ic seed, |Psi| over all cells at N 384 vs 720:
+median 6.6 / 6.5, p99 18.5 / 18.4, p99.99 46.1 / 49.2, p99.9999 109 / 136, max 140 /
+437 Mpc/h; 0 vs 45 cells with `f |Psi| > 150`, the top five 436.6, 436.5, 432.0, 430.4,
+427.6 (one cluster). The bulk of the displacement field is grid-independent; the
+excess is a few cells around one extreme matter peak. Raising the buffer does not fit
+the boxes (`rmax + buffer <= L/2`: bin 1 allows 181, bin 2 172, bin 3 219). Open: JC's
+call on the velocity construction at these grids.
+
 ## M5 -- Ensemble production
 
 Replace or supplement prod_v2 (100 realizations). Realization count, machine, and whether
