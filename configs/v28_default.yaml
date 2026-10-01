@@ -18,3 +18,10 @@ n_workers: null             # sampler threads, one x-slab per task (null: core c
 angular_precut: true        # draw only cells whose galaxies can land in the mask
 row_group_rows: 1048576     # parquet row-group pin (2^20)
 n_radial_bins: 8            # sub-shells of the density-profile diagnostic
+f_nl: 0.0                   # local f_NL (LSS convention); 0 = Gaussian
+fnl_p: 1.0                  # p in b(k) = b + 2 (b - p) f_NL delta_c / M(k)
+# primordial:                # the P(k) tables' normalisation, for M(k); defaults:
+#   A_s: 2.1e-9
+#   n_s: 0.9649
+#   k_pivot: 0.0742280285   # h/Mpc (0.05 / Mpc)
+#   omega_m: 0.3153

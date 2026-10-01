@@ -9,9 +9,9 @@ an optional angular HEALPix mask, and written as one parquet per realization. Th
 default bin table is a seven-shell survey forecast (`logunusual/suite.py`); any table
 with the same fields can be given in the run config.
 
-Status: **M3 performance** (M2's spectrum -> lognormal fields -> Poisson shell
-catalog with radial RSD and mask -> parquet, with the sample stage threaded and the
-drawn region cut to what can feed the masked shell). See `ROADMAP.md` for milestones and gates and
+Status: **M4, local f_NL** (spectrum -> lognormal fields -> Poisson shell catalog
+with radial RSD and mask -> parquet, threaded sampling, and an optional local-f_NL
+scale-dependent galaxy bias). See `ROADMAP.md` for milestones and gates and
 `CLAUDE.md` for the construction and the catalog format.
 
 ## Install
@@ -45,6 +45,15 @@ bin. `radial_buffer` must cover half a cell diagonal plus `f` times the largest 
 displacement of the realized field; the run raises if it does not, and records the
 bound per bin in `summary.json`.
 
+`f_nl` (default 0) adds the local-f_NL scale-dependent bias to the galaxy field,
+`b(k) = b + 2 (b - fnl_p) f_NL delta_c / M(k)`, in the LSS convention (growth
+normalised to 1 today); the matter field and velocities are unchanged. M(k) is
+computed from each bin's P(k) table, so `primordial` must give the table's `A_s`,
+`n_s`, `k_pivot` [h/Mpc] and `omega_m` (defaults: the forecast tables). A lognormal
+cannot reach every target: where b(k) falls toward zero at low k (f_NL < 0 on large
+boxes) the run raises rather than write a catalog whose large-scale power is off the
+target. Positive f_NL up to 100 runs on every default bin.
+
 Output: `<output_dir>/<run_name>/realization_NNNNN/catalog.parq` with columns
 `x, y, z` (float64, Mpc/h, observer at the origin, redshift space) and `bin` (int8),
 bins ascending, row groups pinned at 2^20 rows and never mixing bins, provenance in
@@ -57,8 +66,11 @@ prints the realized density per bin.
 - `logunusual/{grid,pk,field,sample}.py` -- the periodic-box generator.
 - `logunusual/{shell,io,config,run,cli}.py` -- the shell product, catalog format,
   run config, driver, command line.
+- `logunusual/fnl.py` -- the local-f_NL scale-dependent bias.
 - `logunusual/{validate,gates}.py` -- estimators and statistical gates.
-- `scripts/m1_*.py`, `scripts/m2_gates.py` -- gate tables, reproducibility, memory.
+- `scripts/m1_*.py`, `scripts/m2_gates.py`, `scripts/m3_device.py`,
+  `scripts/m4_fnl.py` -- gate tables, reproducibility, memory, device timing, f_NL
+  attainability.
 - `docs/landscape.md` -- literature and code landscape.
 - `ROADMAP.md` -- master plan with acceptance gates per milestone.
 

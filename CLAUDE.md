@@ -12,8 +12,9 @@ CUDA), numpy for per-cell Poisson sampling and placement, streamed parquet outpu
 A run is a list of bins, each a periodic box centred on the observer holding one
 radial shell; galaxies are drawn in the buffered shell, displaced radially by their
 cell's velocity, cut to the shell and an optional angular HEALPix mask, and streamed
-to one parquet per realization. The input P(k) interface is a plain TSV per bin, so
-a nonlinear spectrum or an f_NL scale-dependent bias is a different table (M4).
+to one parquet per realization. The input P(k) interface is a plain TSV per bin (a
+nonlinear spectrum is a different table, M4); local f_NL enters as a scale-dependent
+galaxy bias built from that table (`fnl.py`, M4).
 
 The **default inputs** are a survey forecast: the seven-bin v28 table in `suite.py`
 (shells partitioning z = 0-2.2, densities, biases, growth rates) and, when given, a
@@ -76,14 +77,19 @@ pixi run lint                # flake8, max-line 88, ignore E203
   negative-`P_G` fraction; raises if `xi <= -1`. `pk_on_grid` evaluates the spectrum
   once per integer radius `q = i^2 + j^2 + l^2` and gathers by `radius_index` (M3);
   ~1e-15 relative from evaluating on `k_grid`'s `|k|`, not bitwise.
-- `field.py` **[M1, M2, M3]** -- JAX (eager, x64): white noise (numpy PCG64) ->
+- `fnl.py` **[M4]** -- local f_NL, LSS convention: `LocalPNG` (f_nl, p, delta_c, and
+  the tables' A_s / n_s / k_pivot / omega_m), `poisson_M` (`sqrt(P / P_Phi) / g0`
+  from the bin's own table), `delta_b`, `galaxy_spectrum` (exactly `b * b * spectrum`
+  at f_NL = 0), `growth_md`, `diagnostics` (`b(k_f)/b`, the k where b(k) changes sign).
+- `field.py` **[M1, M2, M3, M4]** -- JAX (eager, x64): white noise (numpy PCG64) ->
   Gaussian -> lognormal galaxy and matter fields -> displacement components
   (`psi_axes`, any subset of "xyz"; `Fields.psi` dict, `psi_flat`). `generate_fields`
   is the entry point; `trace=` hook for memory instrumentation. Two M3 knobs, both
   defaulting to the M1 behaviour and neither reachable from a `RunConfig`:
   `dtype="f32"` halves the device arrays (`resolve_dtype`), and `jit=True` compiles
   `coloured_lognormal` / `displacement`. **`jit` is not bit-preserving**; `dtype`
-  changes every catalog. See ROADMAP M3 for both.
+  changes every catalog. See ROADMAP M3 for both. `fnl=` (M4) makes the galaxy target
+  `b(k)^2 P`; with f_NL != 0 any clipped galaxy P_G mode raises.
 - `sample.py` **[M1, M3]** -- numpy: intensity, per-slab RNG streams (`slab_rng`,
   `draw_slab`: Poisson then uniform-in-cell placement on one x-slab's own stream),
   own-cell plane-parallel RSD, `split_seed`, `default_workers`.
@@ -97,18 +103,21 @@ pixi run lint                # flake8, max-line 88, ignore E203
   `read_bin`.
 - `config.py` **[M2]** -- `RunConfig` (YAML <-> dataclass; bins default to the suite;
   `nbar_scale`/`grid_scale` for smoke runs; `config_hash` over the mock definition,
-  not paths), `default_config`.
+  not paths; `f_nl` / `fnl_p` / `primordial` enter the hash only when f_NL != 0, and
+  `png` is None at f_NL = 0), `default_config`.
 - `run.py` **[M2]** -- `generate_realization`: bins in order, field stage -> streamed
   shell draw -> writer; per-bin metadata and `summary.json`; `plan_realization`.
 - `cli.py` **[M2]** -- `logunusual run | check | default-config` (console script).
 - `validate.py` **[M1]** -- CIC painter, deconvolution, Jing shot noise, multipoles
   (Hermitian-weighted, `n_indep` for SEs), `gaussian_se`, Kaiser boosts, and the
   **coherent-alias estimator response** (`effective_window`, `estimator_response`).
-- `gates.py` **[M1, M2]** -- the statistical gates as functions (slow tests and
+- `gates.py` **[M1, M2, M4]** -- the statistical gates as functions (slow tests and
   `scripts/m{1,2}_gates.py`); per-realization ratios, scatter SEs, derived bands;
-  `gate_shell_density` (M2).
+  `gate_shell_density` (M2); `gate_field_identity(..., fnl=)` (G13) and the
+  matched-seed `gate_fnl_ratio` (G14, consistency only) (M4).
 - `scripts/` -- `m1_gates.py`, `m1_reproducibility.py`, `m1_memory.py`,
-  `m2_gates.py`. `configs/v28_default.yaml` is the worked run config.
+  `m2_gates.py`, `m3_device.py`, `m4_fnl.py` (attainability sweep).
+  `configs/v28_default.yaml` is the worked run config.
 
 ## Construction (M1, decided 2026-09-04 from measurements; first principles, not a
 ## port of the Julia code)
@@ -139,6 +148,18 @@ Grid `N^3`, box `L`, `dx = L/N`, `V_cell = dx^3`; cell centres at `(i + 0.5) dx`
    lognormal field, Agrawal et al. 2017), DC 0, Mpc/h; each galaxy gets its OWN cell's
    `Psi`, times `f` at sampling; plane-parallel `s_z = z + f Psi_z` in M1, radial in
    M2.
+
+7. **Local f_NL (M4)**: the galaxy target becomes `b(k)^2 P` with
+   `b(k) = b + 2 (b - p) f_NL delta_c / M(k)`, LSS convention (`D(0) = 1`). M is not a
+   transfer-function input: `P = M_CMB^2 P_Phi` with `P_Phi = (9/25) 2 pi^2 A_s k^-3
+   (k/k_pivot)^(n_s - 1)` (Phi = 3/5 zeta in matter domination), so
+   `M = sqrt(P / P_Phi) / g0`, `g0 = D_md(0)` from the flat-LCDM growth integral; the
+   table's A_s / n_s / pivot must be the ones it was made with (G12). Matter field and
+   velocities unchanged. **Where b(k) falls toward zero at low k (f_NL < 0) no
+   lognormal reaches the target**: the higher orders of `log(1 + xi)` floor the
+   realizable low-k power at these sigma^2, P_G clips on the lowest shells, and the
+   clipped field's power there would be 1.4x-306x the target. An f_NL run therefore
+   raises on any clipped galaxy mode (attainability table in ROADMAP M4).
 
 **Why not the Julia construction.** Henry's 0.11.0 applies a `sinc^-p` deconvolution
 to the lognormal field AFTER exponentiation. Measured here at bin-5 settings (128^3,
@@ -211,7 +232,10 @@ them in both directions (G10).
   `n_kept / (fsky V_shell)`, `n_galaxies`, `n_drawn`, `n_left_box`, `n_window_cells`
   and `_radial`, `lam_window`, `psi_max`, `required_buffer`, seeds, `pk_file`,
   `pk_sha256`, `sigma2_*`, `xi_min_galaxy`, `clipped_power_fraction`, `psi_rms`,
-  timings, peak live JAX bytes).
+  timings, peak live JAX bytes). `f_nl` is always written; with f_NL != 0 also
+  `fnl_convention` (LSS), `fnl_p`, `fnl_delta_c`, `fnl_A_s`, `fnl_n_s`, `fnl_k_pivot`,
+  `fnl_omega_m`, `fnl_g0`, and per bin `fnl_delta_b_kf`, `fnl_b_kf_over_b`,
+  `fnl_k_zero`.
 - Written as `catalog.parq.tmp` and renamed on close: a file with the final name is
   complete.
 
@@ -346,5 +370,11 @@ them in both directions (G10).
   counts per bin (`ROADMAP.md` M3).
 - **M3 DONE (2026-10-01).** Open, not M3 deliverables: the sample stage's flat scaling
   from 16 to 72 cores and the GPU's per-grid-size first-use cost, both observed only.
+- **M4 local f_NL DONE (2026-10-01)** on branch `jc/m4-fnl-bias`: `fnl.py`, LSS
+  convention, |f_NL| <= 100 measured. G12 (M normalisation, derived bound, mutations
+  fail), G13 (grid identity with b(k), f_NL = +-100, floor met), G14 (matched-seed
+  catalog ratio, consistency gate). f_NL < 0 is unattainable on the lowest shells of
+  bins 2-7 and raises; positive f_NL runs on every bin. Halofit + 1024^3 is the other
+  M4 item, not started.
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.
