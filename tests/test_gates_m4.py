@@ -1,12 +1,15 @@
-"""M4 statistical gates (slow): the grid identity with the f_NL bias (G13) and the
-matched-seed catalog ratio (G14). Boxes are ones whose target is attainable at the
-f_NL values used (`ROADMAP.md` M4: an f_NL run that clips raises)."""
+"""M4 statistical gates (slow): the grid identity with the f_NL bias (G13), the
+matched-seed catalog ratio (G14), and the grid identity with a halofit galaxy target
+(G15). Boxes are ones whose target is attainable at the values used (`ROADMAP.md` M4:
+an f_NL or galaxy-table run that clips raises)."""
 
 import pytest
 
 from logunusual import gates
 from logunusual.fnl import LocalPNG
 from logunusual.grid import Box
+from logunusual.pk import PowerSpectrum, check_table_pair
+from tests.conftest import DATA
 
 pytestmark = pytest.mark.slow
 
@@ -54,3 +57,20 @@ def test_g14_matched_seed_catalog_ratio(spectrum, f_nl, seed0):
         "predicted ratio per band:", [round(x, 4) for x in e.extra["predicted_ratio"]]
     )
     assert e.passed, e.z
+
+
+def test_g15_grid_identity_with_halofit_galaxy_target():
+    # G3's geometry and seed count (128^3, L 1000, 192 seeds), z = 0.9 kh-10 tables:
+    # galaxy b^2 P_halofit (sigma^2 5.45), matter P_lin (1.26); 0 clipped modes
+    lin = PowerSpectrum.from_tsv(DATA / "matterpower_camb_lin_kmax10_zeff=0.9.tsv")
+    hf = PowerSpectrum.from_tsv(DATA / "matterpower_camb_halofit_kmax10_zeff=0.9.tsv")
+    assert check_table_pair(lin, hf) == 0.0
+    res = gates.gate_field_identity(
+        lin, B5, Box(128, 1000.0), range(8600, 8600 + 192), galaxy_table=hf
+    )
+    _report("G15 galaxy, halofit", res["galaxy"])
+    _report("G15 matter, linear", res["matter"])
+    assert res["galaxy"].extra["clipped_power_fraction_max"] == 0.0
+    assert res["galaxy"].extra["sigma2_galaxy"] > 5.0  # the halofit target, not P_lin
+    assert res["galaxy"].passed, res["galaxy"].z
+    assert res["matter"].passed, res["matter"].z

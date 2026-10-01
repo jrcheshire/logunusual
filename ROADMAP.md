@@ -752,7 +752,7 @@ the grid identity is exact, and the lognormal's high-k scatter is correlated acr
 Full suite 117 passed (8:36), `check-format` + `lint` clean, `m1_reproducibility --n
 64` IDENTICAL.
 
-### Nonlinear input P(k) on finer grids: construction and gates (planned 2026-10-01)
+### Nonlinear input P(k): construction and gates (planned 2026-10-01; descoped to the production grids the same day)
 
 **Two tables per bin; only the galaxy target goes nonlinear** (JC, 2026-10-01).
 `Bin.pk_file` stays the linear table and drives the matter field, the velocities and
@@ -777,13 +777,17 @@ nodes (the v28 tables' 2500 per decade):
 `matterpower_camb_{lin,halofit}_kmax10_zeff={z}.tsv`. The 2x grids' corners reach
 k = 1.39 (bin 1), past the v28 tables' kh = 1.
 
-**Grids** (planned as `grid_scale = 2` for every bin, JC; revised after the
-attainability sweep below, JC 2026-10-01): **N 270 / 450 / 720 / 896 / 1024 / 1024 /
-1024**, cells 4.9-7.8 Mpc/h. Bins 4-7 are at 2x; at 2x no lognormal reaches the halofit
-target in bins 1-3, so they take the finest 5-smooth grid with zero clipped P_G modes
-(the clip-free edges measured are N 276 / 462 / 736, the first clipping 280 / 468 /
-744). **A run with a galaxy table raises on any clipped galaxy P_G mode** (JC), as an
-f_NL run does: the clipped field's excess power spreads to every k.
+**Grids: the production grids** (JC, 2026-10-01). Planned as `grid_scale = 2` for
+every bin, then per-bin clip-free grids (270 / 450 / 720 / 896 / 1024^3); both are
+recorded below as measured dead ends (halofit unattainable at 2x in bins 1-3, and the
+displacement tail outruns the radial buffer on every finer grid tried). On the
+production grids halofit is attainable in bins 1-6 and is 1.06x (bin 7) to 1.89x
+(bin 1) the linear power at the Nyquist (1.01x-1.18x at half of it). **A run with a
+galaxy table raises on any clipped galaxy P_G mode** (JC), as an f_NL run does: the
+clipped field's excess power spreads to every k. **Bin 7 keeps the linear galaxy
+target in `configs/v28_halofit.yaml`** (2026-10-01): its 5 fundamental
+modes clip with either table, so a galaxy table would raise there, and halofit is
+1.06x linear at its Nyquist.
 
 **Checks and gates (thresholds derived in the tests or scripts that carry them):**
 
@@ -792,13 +796,15 @@ f_NL run does: the clipped field's excess power spreads to every k.
 | P1 | the table script regenerates the seven v28 linear tables (kh 1e-4 to 1, 10001 nodes) byte for byte; otherwise the max relative difference is reported and nothing proceeds | `make_pk_tables.py --check`, recorded here |
 | pair | `pk.check_table_pair`: a common lowest k node, and `|P_gal / P_lin - 1|` there within `k0^2 sigma_v^2` (the leading low-k nonlinear correction, `P_13 -> -k^2 sigma_v^2 P_lin`, from the linear table; JC); a z-mismatched pair (adjacent bins) fails by > 10x the bound. Called at load in `run.py` | fast, `tests/test_pk.py` |
 | wiring | `pk_galaxy_file == pk_file` is bitwise the single-table stage; with distinct tables `delta_m` / `psi` are bitwise the linear run's and `delta_g` the single-table run's on the galaxy table; with f_NL the target is exactly `(b + delta_b_lin)^2 P_gal` | fast, `tests/test_field.py`, `tests/test_fnl.py` |
-| G15 | G3's grid identity with the halofit galaxy target at a 2x cell (128^3, L 625, dx 4.9, bin-5 b, z 0.9), every band to the Nyquist, SE <= 2%/3 | slow |
-| G16 | the same identity for the linear matter target at that geometry (folded into G15's run) | slow |
+| G15 | G3's grid identity with the halofit galaxy target on G3's geometry (128^3, L 1000, dx 7.8, bin-5 b, z 0.9 kh-10 tables, 192 seeds), galaxy and matter, every band to the Nyquist, SE <= 2%/3 | slow, `tests/test_gates_m4.py` |
+
+(G16, the linear matter identity on a finer cell, was dropped with the finer grids; on
+G3's geometry the matter field is G3's, and G15 runs it alongside.)
 
 No new catalog-level gate: the sampler is unchanged and linear in the intensity
 (G4b/G5), and the two-table wiring is bitwise-gated above.
 
-**Measurements before G15/G16 (heavy, each priced and asked first):** attainability at
+**Measurements before G15 (heavy, each priced and asked first):** attainability at
 grid_scale 1 and 2 for every bin with the linear-kmax10 and halofit tables (galaxy and
 matter `xi_min`, sigma^2, clipped P_G modes and power fraction; the M4 f_NL set), and
 one realization per bin on `configs/v28_halofit.yaml`'s grids (wall, peak RSS,
@@ -888,6 +894,20 @@ median 6.6 / 6.5, p99 18.5 / 18.4, p99.99 46.1 / 49.2, p99.9999 109 / 136, max 1
 excess is a few cells around one extreme matter peak. Raising the buffer does not fit
 the boxes (`rmax + buffer <= L/2`: bin 1 allows 181, bin 2 172, bin 3 219). Open: JC's
 call on the velocity construction at these grids.
+
+**Production grids, as run (2026-10-01, laptop).** G15 (`tests/test_gates_m4.py`, 0
+clipped modes, galaxy sigma^2 5.45): 60 bands to k 0.396, SE 0.06-0.53%, floor met in
+every band; galaxy (halofit) max |z| 1.62, matter (linear) 1.97. Seven-bin realization 0
+of `configs/v28_halofit.yaml` (fiducial mask): 651,451,370 galaxies, 15.04 GiB, layout
+ok, realized/target 0.9987-1.0078, 55 s wall (laptop not checked idle), peak RSS
+14.0 GB. The first attempt, with bin 7 on the halofit table, raised in bin 7's field
+stage (5 clipped modes) as the rule requires.
+Full suite 124 passed (8:53), `check-format` + `lint` clean, `m1_reproducibility --n
+64` IDENTICAL.
+
+Open, not scheduled: the velocity construction on finer cells (above: one extreme
+matter peak sets `max|Psi|`); a test would be Psi from the matter field band-limited
+per axis to the production Nyquist, which removes no mode on the production grids.
 
 ## M5 -- Ensemble production
 

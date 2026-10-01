@@ -94,12 +94,17 @@ def ensemble(k, ratios, *, target=1.0, tol=TOL, require_se=True, extra=None):
 # --------------------------------------------------------------------------- G3
 
 
-def gate_field_identity(spectrum, b, box: Box, seeds, *, jitter_p=1, fnl=None):
+def gate_field_identity(
+    spectrum, b, box: Box, seeds, *, jitter_p=1, fnl=None, galaxy_table=None
+):
     """<P(delta_g)> / target = 1 on every band up to the Nyquist (grid identity); the
     matter field likewise. `target` is the deconvolved grid target the field was built
-    for (`b(k)^2 P` with `fnl`, an `fnl.LocalPNG`)."""
+    for (`b(k)^2 P` with `fnl`, an `fnl.LocalPNG`; `P` from `galaxy_table` when given,
+    G15)."""
     tg = validate.shell_average(
-        field.target_on_grid(_fnl.galaxy_spectrum(spectrum, b, fnl), box, jitter_p),
+        field.target_on_grid(
+            _fnl.galaxy_spectrum(spectrum, b, fnl, galaxy_table), box, jitter_p
+        ),
         box,
     )
     tm = validate.shell_average(field.target_on_grid(spectrum, box, jitter_p), box)
@@ -107,7 +112,14 @@ def gate_field_identity(spectrum, b, box: Box, seeds, *, jitter_p=1, fnl=None):
     rg, rm, clipped = [], [], []
     for s in seeds:
         F = field.generate_fields(
-            spectrum, b, box, s, jitter_p=jitter_p, keep_matter=True, fnl=fnl
+            spectrum,
+            b,
+            box,
+            s,
+            jitter_p=jitter_p,
+            keep_matter=True,
+            fnl=fnl,
+            galaxy_table=galaxy_table,
         )
         pg = validate.field_power(F.delta_g, box)
         pm = validate.field_power(F.delta_m, box)
