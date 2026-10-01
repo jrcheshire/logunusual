@@ -650,9 +650,10 @@ observations above are open performance questions, not M3 deliverables.
 
 ## M4 -- Physics upgrades (each opens its own plan session)
 
-- **Nonlinear input P(k):** halofit TSVs (a flag in `make_matter_power.py`) together
-  with the 1024^3 grid the finer scales need; at 512^3 halofit alone changes little
-  because the grid Nyquist binds first.
+- **Nonlinear input P(k):** halofit TSVs (`scripts/make_pk_tables.py`) together
+  with the 2x grids (up to 1024^3) the finer scales need; at the production grids
+  halofit alone changes little because the grid Nyquist binds first. Construction and
+  gates below.
 - **f_NL scale-dependent bias in the input galaxy P(k):**
   `b(k) = b + 2 (b - p) f_NL delta_c / M(k)` with the Poisson factor `M(k)`. Gate: low-k
   P_0(f_NL) / P_0(0) matches the injected ratio; the P_G inversion stays non-negative
@@ -750,6 +751,53 @@ the grid identity is exact, and the lognormal's high-k scatter is correlated acr
 
 Full suite 117 passed (8:36), `check-format` + `lint` clean, `m1_reproducibility --n
 64` IDENTICAL.
+
+### Nonlinear input P(k) on 2x grids: construction and gates (planned 2026-10-01)
+
+**Two tables per bin; only the galaxy target goes nonlinear** (JC, 2026-10-01).
+`Bin.pk_file` stays the linear table and drives the matter field, the velocities and
+M(k): continuity `Psi_k = i k / k^2 delta_m,k` is a linear relation, and
+`P = M^2 P_Phi` holds only in linear theory. A new `Bin.pk_galaxy_file` (empty = the
+same table) sets the galaxy target, `b(k)^2 P_gal`, with `b(k)` still built from the
+linear table. The field is drawn from one white noise as before; with distinct tables
+the matter field and velocities are bitwise those of the linear run. `pk_galaxy_file`
+enters the config hash only when set, so every existing config and catalog is
+unchanged.
+
+**Tables** (`scripts/make_pk_tables.py`, pixi env `tables`, osx-arm64 only:
+conda-forge `camb 1.5.9` build `py312h904ef0c_0`, the build that made the v28 tables
+in the emufab env; linux-aarch64 has no 1.5.9). Cosmology and call sequence are
+`make_matter_power.py`'s (Planck 2018, `delta_tot`). Nonlinear: CAMB
+`halofit_version = "takahashi"` (Takahashi et al. 2012, JC). CAMB's implementation
+carries the Bird et al. 2012 massive-neutrino terms (`fnu = omnuh2 / omm0` in `beta`,
+the halo term and `plinaa`; read in CAMB's `halofit.f90`) and applies the correction
+only above `Min_kh_nonlinear` = 0.005 h/Mpc. New tables run kh 1e-4 to 10 at 12501
+nodes (the v28 tables' 2500 per decade):
+`matterpower_camb_{lin,halofit}_kmax10_zeff={z}.tsv`. The 2x grids' corners reach
+k = 1.39 (bin 1), past the v28 tables' kh = 1.
+
+**Grids: `grid_scale = 2` for every bin** (JC): N 384 / 512 / 768 / 896 / 1024 /
+1024 / 1024, cells 3.9-7.8 Mpc/h.
+
+**Checks and gates (thresholds derived in the tests or scripts that carry them):**
+
+| check | statistic | where |
+|---|---|---|
+| P1 | the table script regenerates the seven v28 linear tables (kh 1e-4 to 1, 10001 nodes) byte for byte; otherwise the max relative difference is reported and nothing proceeds | `make_pk_tables.py --check`, recorded here |
+| pair | `pk.check_table_pair`: a common lowest k node, and `P_gal / P_lin` there within a bound measured on the seven v28 pairs; a z-mismatched pair (adjacent bins) fails by > 10x the bound. Called at load in `run.py` | fast, `tests/test_pk.py` |
+| wiring | `pk_galaxy_file == pk_file` is bitwise the single-table stage; with distinct tables `delta_m` / `psi` are bitwise the linear run's and `delta_g` the single-table run's on the galaxy table; with f_NL the target is exactly `(b + delta_b_lin)^2 P_gal` | fast, `tests/test_field.py`, `tests/test_fnl.py` |
+| G15 | G3's grid identity with the halofit galaxy target at a 2x cell (128^3, L 625, dx 4.9, bin-5 b, z 0.9), every band to the Nyquist, SE <= 2%/3 | slow |
+| G16 | the same identity for the linear matter target at that geometry (folded into G15's run) | slow |
+
+No new catalog-level gate: the sampler is unchanged and linear in the intensity
+(G4b/G5), and the two-table wiring is bitwise-gated above.
+
+**Measurements before G15/G16 (heavy, each priced and asked first):** attainability at
+grid_scale 1 and 2 for every bin with the linear-kmax10 and halofit tables (galaxy and
+matter `xi_min`, sigma^2, clipped P_G modes and power fraction; the M4 f_NL set), and
+one 2x realization per bin (wall, peak RSS, `psi_max` against the 150 Mpc/h buffer).
+GPU f64 at 1024^3 (~96 GiB allocator peak) does not fit a GH200; f32 (~48) would, but
+f32 is not a `RunConfig` field. Reported, not decided here.
 
 ## M5 -- Ensemble production
 
