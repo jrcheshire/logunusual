@@ -654,12 +654,40 @@ observations above are open performance questions, not M3 deliverables.
   with the 1024^3 grid the finer scales need; at 512^3 halofit alone changes little
   because the grid Nyquist binds first.
 - **f_NL scale-dependent bias in the input galaxy P(k):**
-  `b(k) = b + 2 (b - p) f_NL delta_c / M(k)` with the Poisson factor `M(k)` (copy from
-  disco-mocks `cosmology.poisson_M`). Gate: low-k P_0(f_NL) / P_0(0) matches the injected
-  ratio; the P_G inversion stays non-negative where the grid uses it. Scope: two-point
-  only (null tests, covariance shape); a lognormal is not an f_NL bispectrum mock.
+  `b(k) = b + 2 (b - p) f_NL delta_c / M(k)` with the Poisson factor `M(k)`. Gate: low-k
+  P_0(f_NL) / P_0(0) matches the injected ratio; the P_G inversion stays non-negative
+  where the grid uses it. Scope: two-point only (null tests, covariance shape); a
+  lognormal is not an f_NL bispectrum mock. Construction and gates below.
 - On demand only: Finger-of-God scatter (`sigma_psi`), deterministic-count sampling
   (`minimize_shotnoise`), multi-tracer.
+
+### f_NL scale-dependent bias: construction and gates (planned 2026-10-01)
+
+**Convention: LSS** (JC, 2026-10-01): `M(k, z) = (2/3) (c/H0)^2 k^2 T(k) D(z) / Om`
+with `D(0) = 1`, so `f_NL^LSS = f_NL^CMB / g0`, `g0 = D_md(0)` (growth normalised to `a`
+in matter domination; ~0.78 for Om = 0.3153). Supported and gated for `|f_NL| <= 100`.
+
+**M(k) comes from the bin's own P(k) table.** With `Phi = (3/5) zeta` in matter
+domination, `P(k, z) = M_CMB(k, z)^2 P_Phi(k)`, `P_Phi = (9/25) 2 pi^2 A_s k^-3
+(k / k_pivot)^(n_s - 1)`, so `M_CMB = sqrt(P / P_Phi)` exactly and z enters through the
+table; `M = M_CMB / g0`. Inputs: `A_s`, `n_s`, `k_pivot` of the tables (v28: 2.1e-9,
+0.9649, 0.05/Mpc) and Om for g0. Only the galaxy target changes,
+`b^2 P -> b(k)^2 P`, `b(k) = b + 2 (b - p) f_NL delta_c / M(k)`, p = 1, delta_c = 1.686;
+the matter field and the velocities do not. f_NL = 0 is bitwise the M3 code, and the
+f_NL keys enter the config hash only when nonzero.
+
+**Gates (thresholds derived in the tests that carry them):**
+
+| gate | statistic | where |
+|---|---|---|
+| G12 | `M_CMB / [(2/3)(c/H0)^2 k^2 D_md / Om]` -> 1 at the lowest table node (the T = 1 limit, growth from the flat-LCDM integral); tolerance from T(k)'s own low-k departure plus the neutrino / radiation terms the integral omits. Mutations must fail: pivot 0.05/Mpc read as h/Mpc (0.7%), a missing 9/25, CMB normalisation where LSS is meant. Growth integral: EdS gives g0 = 1; D -> a at high z. b(k): sign, `Delta b ~ k^-2` at low k, `b = p` gives none, f_NL = 0 bitwise. | fast, `tests/test_fnl.py` |
+| G13 | G3's grid identity `<P(delta_g)> / P_grid` with the b(k) target, f_NL = +-100, every band to the Nyquist, SE <= 2%/3 | slow, 128^3, L 1000, bin-5 b |
+| G14 | matched seeds (same ic and draw): per-realization real-space `(P0 - shot)` ratio f_NL / f_NL = 0 against `<b(k)^2 P R> / <b^2 P R>` (R the estimator response), low k | slow, a box large enough for the signal (L 2000-3000, dx ~ 16) |
+
+**Attainability (measurement, before the slow gates):** every v28 bin at its
+production grid, f_NL in {-100, -10, -1, 1, 10, 100}: `xi_min`, sigma^2, clipped modes
+and power fraction of P_G, `b(k_f) / b`, and the k where b(k) crosses zero (f_NL < 0).
+Any clipping is reported as a finding; nothing handles it automatically.
 
 ## M5 -- Ensemble production
 
