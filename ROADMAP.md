@@ -689,6 +689,40 @@ production grid, f_NL in {-100, -10, -1, 1, 10, 100}: `xi_min`, sigma^2, clipped
 and power fraction of P_G, `b(k_f) / b`, and the k where b(k) crosses zero (f_NL < 0).
 Any clipping is reported as a finding; nothing handles it automatically.
 
+**Attainability, measured (2026-10-01, laptop, `scripts/m4_fnl.py attain`, 40 s, peak
+RSS 12 GB; `runs/m4/attain_20261001-111917.json`).** Clipped galaxy P_G modes per bin
+at its production grid:
+
+| bin | N, L | -100 | -10 | -1 | 0 | +1 | +10 | +100 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 192, 1500 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 2 | 256, 2500 | 5 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 3 | 384, 3500 | 17 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 4 | 448, 4500 | 41 | 5 | 0 | 0 | 0 | 0 | 0 |
+| 5 | 512, 5000 | 85 | 5 | 0 | 0 | 0 | 0 | 0 |
+| 6 | 512, 7000 | 486 | 33 | 5 | 0 | 0 | 0 | 0 |
+| 7 | 512, 8000 | 1540 | 94 | 13 | 5 | 0 | 0 | 0 |
+
+**Positive f_NL is attainable everywhere; negative f_NL is not, on the lowest shells.**
+At f_NL < 0, b(k) falls toward zero at low k (and crosses it: bin 5 at -100 has
+`b(k_f)/b = -6.8`, zero at k = 3.8e-3). A lognormal at the grids' sigma^2 of 2.3-3.3
+cannot carry power that low: the higher orders of `log(1 + xi)` add a white term that
+floors the realizable power, so P_G goes negative on exactly those shells. The clipped
+power FRACTION (1e-8 to 2e-5) hides how wrong the result would be there. The exact
+ensemble power of the clipped field against the target, per shell (|k| in units of k_f):
+bin 3 at -100, 8.6x at sqrt2 and 4.0x at sqrt3; bin 5 at -10, 8.6x at the fundamental;
+bin 5 at -100, 1.6x-306x over 2.45-3.6 (the peak where b(k) crosses zero); bin 7 at -1,
+3.9x at 1 and 1.37x at sqrt2; bin 7 at -10, 2x-230x over 1.7-3.5. Every other shell is
+exact.
+
+**Decision (JC, 2026-10-01): with f_NL != 0 any clipped galaxy P_G mode raises in the
+field stage** (`field.generate_fields`), before the bin is sampled. Gaussian runs keep
+reporting clipping (bin 7's fundamental, 1.109x; see Known risks). An f_NL < 0 run is
+therefore possible only where it is exact: at -1 everywhere but bins 6-7, at -10 in
+bins 1-3, at -100 in bin 1. The gate boxes follow: G13 on G3's geometry (128^3, L 1000)
+clips at neither +100 nor -100; G14's 128^3, L 2000 box clips at -50 and -100, so G14
+runs at +100 and -20.
+
 ## M5 -- Ensemble production
 
 Replace or supplement prod_v2 (100 realizations). Realization count, machine, and whether
@@ -705,7 +739,10 @@ prod_v2 is retired are JC's call; not scheduled here.
 - Attainability of the deconvolved target (`P/sinc^2`, uniform placement) for the v28
   bins at their production grids (measured 2026-09-04, `grid_pkG` diagnostics): bins 1-6
   zero clipped modes, `xi_min` > -0.004; bin 7 (b = 3.29, dx 15.6) clips 5 of 67M modes
-  carrying 1e-8 of the power. Grid sigma^2 of the galaxy field 2.3-3.3, matter 0.26-2.8.
+  carrying 1e-8 of the power. Those 5 modes are the fundamental shell, and there the
+  realized ensemble power is **1.109x the target** (exact, from the clipped P_G,
+  2026-10-01); every other shell is exact. Grid sigma^2 of the galaxy field 2.3-3.3,
+  matter 0.26-2.8.
 - prod_v2's growth rates come from astropy Planck18 (Om0 = 0.30966) while its distances
   use Om0 = 0.3153; `suite.py` keeps the literals for drop-in fidelity. Reconciling is an
   M4 decision.

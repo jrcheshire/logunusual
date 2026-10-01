@@ -148,7 +148,8 @@ the density by ~27%, which matches prod_v2's 1.28x over-density (consistent with
 proven). Deconvolving the TARGET instead is exact by the grid identity, but with the
 triangular (p = 2) jitter it needs `P/sinc^4`, whose `xi` reaches -1.22 at the
 neighbour lag: no lognormal exists. With uniform (p = 1) placement `P/sinc^2` is
-attainable with zero clipped modes for every v28 bin (see ROADMAP). Own-cell velocity
+attainable with zero clipped modes for v28 bins 1-6; bin 7 clips its 5 fundamental
+modes, where the realized power is 1.109x the target (see ROADMAP). Own-cell velocity
 assignment (not the 3x3x3 stencil) keeps the RSD prediction window-free.
 
 **Estimator response (validate.py).** A catalog drawn from a grid field is

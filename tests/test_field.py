@@ -194,6 +194,21 @@ def test_zero_fnl_is_the_gaussian_stage_bitwise(spectrum):
     assert up.diagnostics["fnl"]["b_kf_over_b"] > 1.0
 
 
+def test_unattainable_fnl_target_raises(spectrum):
+    from logunusual.fnl import LocalPNG
+
+    # 32^3, L = 2000, b = 1.76: f_NL = -100 clips 13 P_G modes, +100 none (measured)
+    box = Box(32, 2000.0)
+    with pytest.raises(ValueError, match="not attainable"):
+        field.generate_fields(spectrum, 1.76, box, 1, fnl=LocalPNG(-100.0))
+    F = field.generate_fields(spectrum, 1.76, box, 1, fnl=LocalPNG(100.0))
+    assert F.diagnostics["galaxy"]["n_clipped"] == 0
+    # a Gaussian run that clips is reported, not refused: 64^3, L = 4000, b = 3.29
+    # clips the 5 fundamental modes at f_NL = 0 (as v28 bin 7 does)
+    g = field.generate_fields(spectrum, 3.29, Box(64, 4000.0), 1, fnl=LocalPNG(0.0))
+    assert g.diagnostics["galaxy"]["n_clipped"] == 5
+
+
 def test_resolve_dtype_rejects_unknown():
     assert field.resolve_dtype("f64") == (np.float64, np.complex128)
     assert field.resolve_dtype("f32") == (np.float32, np.complex64)

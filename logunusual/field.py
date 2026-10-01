@@ -185,8 +185,12 @@ def generate_fields(
     coloured from the SAME white noise, both targets deconvolved by the
     order-`jitter_p` placement window. `fnl` (an `fnl.LocalPNG`) makes the galaxy
     target `b(k)^2 P` and leaves the matter field alone; None or f_NL = 0 is the
-    scalar-bias stage bitwise. `dtype` (`"f64"` / `"f32"`) is the precision of
-    the DEVICE arrays, see `resolve_dtype`. `jit` compiles the stage's two pure device
+    scalar-bias stage bitwise. With f_NL != 0 a galaxy P_G that clips any mode
+    raises: where b(k)^2 P falls toward zero at low k (f_NL < 0) the lognormal cannot
+    reach it, and the clipped field's power sits far above the target on exactly the
+    shells that carry the f_NL signal. Gaussian runs report clipping, as before.
+    `dtype` (`"f64"` / `"f32"`) is the precision of the DEVICE arrays, see
+    `resolve_dtype`. `jit` compiles the stage's two pure device
     functions (`coloured_lognormal`, `displacement`); it is off by default because it
     is not bit-preserving. `trace(label)` is called after each array step (memory
     instrumentation)."""
@@ -211,6 +215,15 @@ def generate_fields(
         jnp,
     )
     trace("pkG_g")
+    if fnl is not None and fnl.f_nl != 0 and diag_g["n_clipped"]:
+        d = _fnl.diagnostics(spectrum, b, fnl, box)
+        raise ValueError(
+            f"f_NL = {fnl.f_nl:g}: the galaxy target b(k)^2 P is not attainable by a "
+            f"lognormal on this grid ({diag_g['n_clipped']} P_G modes < 0, "
+            f"b(k_f)/b = {d['b_kf_over_b']:.3f}, b(k) changes sign at "
+            f"k = {d['k_zero']}); clipping them would leave the realized power off "
+            "the target on the lowest shells"
+        )
     delta_g = _lognormal_of(white_k, pkG_g, box)
     del pkG_g
     trace("delta_g")
