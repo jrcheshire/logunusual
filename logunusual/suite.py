@@ -36,6 +36,15 @@ RADIAL_BUFFER = 150.0
 H0_DISTANCE = 67.36
 OMEGA_M_DISTANCE = 0.3153
 
+#: Primordial normalisation the matter-power tables were made with (CAMB, Planck 2018:
+#: `make_matter_power.py`); `fnl.LocalPNG` needs it to recover M(k) from a table.
+PRIMORDIAL_AS = 2.1e-9
+PRIMORDIAL_NS = 0.9649
+PRIMORDIAL_K_PIVOT = 0.05 / (H0_DISTANCE / 100.0)  # CAMB's 0.05 / Mpc, in h/Mpc
+
+#: Spherical-collapse threshold in the f_NL bias response.
+DELTA_C = 1.686
+
 #: Survey mask contract: HEALPix NSIDE 128, NESTED, int8 dataset `MASK`, fsky 0.7127.
 MASK_NSIDE = 128
 MASK_ORDERING = "NESTED"
