@@ -153,7 +153,7 @@ reference at bin 5 (255 s / 75 GB for one bin): 39 s / 7 GiB live. Bins 1-2 had 
 wide-angle estimator is not part of the package); the geometry is exact by the tests
 above and the plane-parallel physics is M1 G6.
 
-## M3 -- Performance and memory
+## M3 -- Performance and memory  [done 2026-10-01]
 
 Per-bin wall and peak allocation on the laptop, on deneb's RTX 3050 (6 GB: float32 fields
 or slab FFTs), and one TACC GPU node, tabulated against the Julia baseline above. CPU vs
@@ -564,8 +564,8 @@ Full suite 99 passed / 0 failed (4:50), `check-format` + `lint` clean.
 
 12.3x on the piece the table replaces, 2.35x on each conversion, 1.6-1.75x on the
 stage (one `wall` run each side). The conversion is now 73% device on the laptop, and
-`irfftn_xi` is still the one bimodal piece (0.16-0.68 s). The GH200 gain is
-unmeasured: the Vista seven-bin re-measurement will carry it.
+`irfftn_xi` is still the one bimodal piece (0.16-0.68 s). (Measured on the GH200
+2026-09-30, job 1039040, below: 5.8x on each conversion, 3.1x on the stage.)
 
 ### Seven-bin realization on the laptop, re-measured (2026-09-30, commit `44ee60a`)
 
@@ -590,8 +590,63 @@ sample stage (with the streamed write) 50 s. The draw over-shoot fell from 2.4x 
 1.4-2.1x with the angular pre-cut. The headline target, a seven-bin realization in
 single-digit minutes on the laptop, is met at under a minute and a half.
 
-**Still owed by M3:** the seven-bin re-measurement on Vista (against 259 s), which
-also carries the spline table's GH200 gain.
+### Seven-bin realization on a Vista GH200, re-measured (2026-09-30, job 1039040, commit `0684ce1`)
+
+`scripts/m3_vista_c.sbatch`, partition `gh`, one node, 72 affinity cores, 72 sampler
+threads; log `logunusual-m3-vista-c-1039040.log`, JSON `runs/m3/vista_c_*.json`. The
+device check passed first; every phase rc 0; `logunusual check`: layout ok.
+
+**The spline table on the node, bin05 512^3** (`pkg` median of 5, both arms BITWISE
+against the shipped call, diagnostics identical; `wall` one run):
+
+| | job 1014508 (direct) | job 1039040 (table) | laptop (table) |
+|---|---|---|---|
+| spectrum on the grid | 2.25 s (spline) | 0.26 s (index 0.026, table 0.004, gather 0.231) | 0.14 s |
+| one conversion (pkG_g) | 2.57 s, host 98.0% | **0.44 s**, host 88.3% | 1.20 s, host 19.2% |
+| field stage, blocked / unblocked | 7.74 / 6.27 s | **3.55 / 2.01 s** | 5.16 / 4.62 s |
+
+5.8x on each conversion and 3.1x on the unblocked stage; the GH200 field stage is now
+2.3x the laptop's. The conversion is still host-bound on the node: the gather alone is
+52% of it (0.23 s, twice the laptop's 0.12 s) and `jitter_window` + divide another 29%;
+the device pieces total 0.014 s.
+
+**Full seven-bin realization: 82 s (81.9) against 259 s on job 1002399 and the
+laptop's 82 s (82.1) on the same code.**
+
+| bin | N | field GH200 | field laptop | sample GH200 | sample laptop |
+|---|---|---|---|---|---|
+| bin01 | 192 | 2.2 s | 0.8 s | 2.7 s | 1.9 s |
+| bin02 | 256 | 2.3 s | 1.1 s | 8.2 s | 5.6 s |
+| bin03 | 384 | 6.7 s | 2.4 s | 7.5 s | 5.0 s |
+| bin04 | 448 | 5.9 s | 5.0 s | 9.2 s | 11.7 s |
+| bin05 | 512 | 6.8 s | 7.7 s | 9.8 s | 12.3 s |
+| bin06 | 512 | 1.9 s | 7.1 s | 8.6 s | 9.8 s |
+| bin07 | 512 | 1.9 s | 7.3 s | 4.0 s | 4.0 s |
+| total | | 27.8 s | 31.5 s | 50.1 s | 50.4 s |
+
+**The realization is the laptop's, count for count:** 651,439,871 galaxies, and per bin
+the kept, drawn and left-the-box counts and both seeds agree exactly; `psi_max` agrees
+to <= 3.4e-15 relative and `sigma2_galaxy` to <= 3e-16, the CPU-vs-CUDA last-bit
+difference recorded above. 15.04 GiB, realized/target 0.9988-1.0079.
+
+Two observations, neither measured:
+
+- **A first-use cost per grid size on the GPU.** Bins 6 and 7 (the second and third
+  512^3 bins) spend 1.9 s in the field stage, matching the standalone unblocked 2.01 s;
+  bin05, the first 512^3 bin, spends 6.8 s, and bin03 (the only 384^3) 6.7 s. The
+  laptop shows no such step (bins 5-7 at 7.1-7.7 s). Scaling the 512^3 2.0 s by
+  N^3 log N puts bins 1-5's work at ~4.4 s against the 24.1 s they spend, so on that
+  scaling ~20 s of the 82 is first-use cost. The pattern fits a per-shape compile or
+  FFT-plan cost; the cause is not measured.
+- **The sample stage does not scale past the laptop's cores.** 50.1 s on 72 threads
+  against 50.4 s on 16; per bin the GH200 is faster on bins 4-6, slower on 1-3, equal on
+  7. Bash `time` for the whole process: 1m42.5 real, 3m42.5 user, so 2.2 cores busy on
+  average (field stage, startup and the streamed write included). What serialises it
+  is not measured.
+
+**M3 targets met:** a 512^3 bin under 15 GB (12.03 GiB, f64 eager, GH200) and a
+seven-bin realization on the laptop in single-digit minutes (82 s). The two
+observations above are open performance questions, not M3 deliverables.
 
 ## M4 -- Physics upgrades (each opens its own plan session)
 

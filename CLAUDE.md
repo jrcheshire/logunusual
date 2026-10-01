@@ -278,7 +278,10 @@ them in both directions (G10).
   stage from 22.7 s to 2.1 s on the laptop's 16 cores (19.8 s on one thread; draws
   311M -> 230M). With that and the spline table (2026-09-30) the full seven-bin
   realization takes **82 s on the laptop** (was 187 s), peak RSS 13.8 GB; field 31 s,
-  sample + write 50 s. Vista re-measurement still owed.
+  sample + write 50 s. The same realization on a Vista GH200 (2026-09-30, job 1039040)
+  also takes 82 s, with identical counts per bin: field 28 s, sample + write 50 s on 72
+  threads -- the sample stage does not scale past the laptop's 16 cores (unmeasured
+  why), and the GPU pays a first-use cost per grid size (~20 s of the 82, estimated).
 
 ## Working rules (project)
 
@@ -335,9 +338,12 @@ them in both directions (G10).
 - **M3 spline table ADOPTED (2026-09-30):** `pk_on_grid` gathers a per-radius table
   (max 9 eps from direct evaluation, gate derived in `tests/test_pk.py`); every
   catalog changes at the last bit. Laptop 512^3: each conversion 2.82 -> 1.20 s,
-  field stage 8.31 -> 5.16 s blocked (8.09 -> 4.62 unblocked). GH200 gain unmeasured.
-- **Seven-bin laptop re-measurement DONE (2026-09-30):** 82 s vs 187 s, 651.4M
-  galaxies, 15.04 GiB, layout ok (`ROADMAP.md` M3).
-  **Still owed:** seven-bin re-measurement on Vista (against 259 s).
+  field stage 8.31 -> 5.16 s blocked (8.09 -> 4.62 unblocked). GH200 (job 1039040):
+  each conversion 2.57 -> 0.44 s, unblocked stage 6.27 -> 2.01 s, 2.3x the laptop.
+- **Seven-bin re-measurement DONE (2026-09-30):** laptop 82 s vs 187 s, 651.4M
+  galaxies, 15.04 GiB, layout ok; Vista GH200 82 s vs 259 s (job 1039040), identical
+  counts per bin (`ROADMAP.md` M3).
+- **M3 DONE (2026-10-01).** Open, not M3 deliverables: the sample stage's flat scaling
+  from 16 to 72 cores and the GPU's per-grid-size first-use cost, both observed only.
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.
