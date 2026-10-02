@@ -1054,6 +1054,22 @@ meaning, now exact.
 | scope | a large Psi in a drawn cell inside the shell does not raise; the same Psi in an undrawn cell next to the window does | fast, `tests/test_shell.py` |
 | re-pilot | realizations 0 and 50 on deneb pass; required_buffer per bin recorded | deneb |
 
+Re-pilot (deneb job 2081, commit `bc60355`, realizations 0 and 50 together on 2x16
+cores): both pass `check`; realization 0 is the pilot's catalog to the galaxy
+(651,451,068), as a guard change must leave it. Exact `required_buffer` per bin
+(Mpc/h; the window-max `f max|Psi|` the old guard used in brackets):
+
+| r | b1 | b2 | b3 | b4 | b5 | b6 | b7 |
+|---|---|---|---|---|---|---|---|
+| 0 | 69.6 (107) | 68.6 (106) | 69.5 (106) | 60.8 (98) | 53.5 (84) | 48.2 (51) | 31.7 (26) |
+| 50 | 53.0 (184) | 59.8 (92) | 82.3 (241) | 87.4 (101) | 97.8 (94) | 45.9 (55) | 29.6 (27) |
+
+The worst of the 14 leaves 52 Mpc/h of the 150 buffer; the exact requirement still has
+a tail (a peak just outside the window), so a seed can in principle fail. Cost with two
+streams: 96-99 s per realization (79 s alone), peak RSS 11.5-11.9 GB, `/work` writes
+300-316 MB/s while both stream (the array's ~325), and sha256 read-back 45 s per
+catalog (not from page cache).
+
 ## Known risks / open questions
 
 - The prod_v2 1.28x over-density is consistent with the LogNormalGalaxies 0.9.4 -> 0.10
