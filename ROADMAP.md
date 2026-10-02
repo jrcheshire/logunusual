@@ -962,6 +962,38 @@ affinity: XLA-CPU's reduction order follows the thread pool.
 | E1 | 100/100 catalogs pass `check`; one config hash; 700 distinct seeds; 100 manifest entries | `scripts/m5_ensemble.py` |
 | E2 | per bin, the ensemble mean of realized/target nbar is 1 within 3 SE (SE from the scatter over realizations): the lognormal is normalised to its box mean and stationary, so the real-space density's expectation is exactly the target at every point (by symmetry on the periodic box); the radial RSD shift across a curved shell adds `3 sigma_s^2 (rmax - rmin) / (rmax^3 - rmin^3)` (sigma_s the rms radial `f Psi`), <= 1e-4 in every bin and reported; a wrong fsky, a mask-edge bias or a buffer leak shows here | `scripts/m5_ensemble.py` |
 
+### Pilot and the displacement tail (2026-10-01, deneb jobs 2077 / 2078, commits `48963a8` / `a2a3b8b`)
+
+Pilot (realizations 0 and 50 together, 2x16 cores): realization 0 passes (79 s,
+peak RSS 11.9 GB, sha256 7 s, layout ok, realized/target 0.9987-1.0078, 15.04 GiB;
+the array took 145-190 MB/s from one writer). **Realization 50 fails the buffer guard
+in bin 1**: f max|Psi| = 183.5 Mpc/h, so the shell needs 190.3 against the 150
+buffer, and bin 1's box allows at most 181.8 (`L/2 - rmax`; bin 2: 172.2).
+
+Mechanism (`scripts/m5_psi_tail.py`, bin 1, the production field bitwise; f|Psi| in
+Mpc/h, maxima over the radial window):
+
+| | r0 | r50 |
+|---|---|---|
+| densest matter cell: delta_m (Gaussian field there) | 203 (5.17 sigma) | 289 (5.47 sigma) |
+| max f|Psi|; its cell's offset from the densest cell | 106.7; far (34, 73, 34) | 183.5; adjacent (0, 1, 0) |
+| point-mass f|Psi| from the densest cell alone at the max cell | 0.0 | 105.1 |
+| max f|Psi| with delta_m -> 0 in the top 1 / 8 / 64 cells | 106.7 / 86.7 / 60.7 | 93.3 / 88.1 / 62.5 |
+| |Psi| per-component rms; p99.999 | 5.65; 120.9 | 5.68; 131.5 |
+| window cells (expected galaxies) with f|Psi| > 50 / 100 / 150 | 147 (9,335) / 5 (158) / 0 | 180 (11,756) / 6 (233) / 6 (233) |
+| Psi from a Gaussian field, same white noise and target `P / sinc^2`: max f|Psi|; rms; cellwise corr | 19.4; 5.64; 0.87 | 18.7; 5.66; 0.87 |
+| lognormal matter target without `/ sinc^2`: max f|Psi|; delta_m max; rms | 64.9; 98; 5.32 | 64.4; 91; 5.33 |
+
+Linear continuity applied to the lognormal matter field turns each of its few densest
+cells (delta_m ~ 200-300 at 5-5.5 sigma of the Gaussian field) into a point source of
+displacement: f|Psi| ~ 100-180 Mpc/h in the neighbouring cells, 20-30x the rms. In
+r50 a single cell sets the guard's requirement (removing it: 183.5 -> 93.3). The tail
+reaches ~1e-4 of a bin's galaxies above 50 Mpc/h and ~2e-6 above 100. A Gaussian
+field with the same target has the same displacement rms (two-point identical by
+construction) and a maximum of ~19. The jitter deconvolution of the matter target
+doubles the densest cells and the tail. The guard takes the GLOBAL max over the
+window, so the most extreme of ~2.4M cells sets every realization's requirement.
+
 ## Known risks / open questions
 
 - The prod_v2 1.28x over-density is consistent with the LogNormalGalaxies 0.9.4 -> 0.10
