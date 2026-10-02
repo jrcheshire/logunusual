@@ -911,8 +911,56 @@ per axis to the production Nyquist, which removes no mode on the production grid
 
 ## M5 -- Ensemble production
 
-Replace or supplement prod_v2 (100 realizations). Realization count, machine, and whether
-prod_v2 is retired are JC's call; not scheduled here.
+Replaces prod_v2, which is retired (JC, 2026-10-01). Scope (JC): 100 realizations to
+start, f_NL = 0, the halofit galaxy target of `configs/v28_halofit.yaml` (bins 1-6;
+bin 7 keeps the linear target, M4), on deneb.
+
+### Construction (planned 2026-10-01)
+
+**Growth rate.** Drop-in fidelity to prod_v2 no longer constrains `Bin.f`. It is now
+the exact linear growth rate `f = dln D / dln a` of the flat-LCDM background the
+package already uses for distances (`OMEGA_M_DISTANCE` = 0.3153) and for f_NL's
+`g0` (`fnl.growth_md`): `f = -3/2 Om(a) + 1 / (a^2 E(a)^3 I(a))`, with
+`I(a) = int_0^a da' / (a' E(a'))^3` the Heath integral. `fnl.growth_rate_md`
+computes it; `suite.py` stores the literals (dependency-free) and a test recomputes
+them. The CAMB tables' cosmology (Planck 2018, `make_pk_tables.PLANCK18`) has
+Om0 = 0.3152 (cdm + baryon + nu), the same background. Measured against
+alternatives at the v28 z_eff (2026-10-01):
+
+| z | prod_v2 (astropy Planck18 Om^0.55) | Om(z)^0.55, Om0 0.3153 | exact, Om0 0.3153 | CAMB f sigma8 / sigma8 |
+|---|---|---|---|---|
+| 0.1 | 0.58193 | 0.58733 | 0.58572 | 0.58654 |
+| 0.3 | 0.67977 | 0.68520 | 0.68490 | 0.68587 |
+| 0.5 | 0.75571 | 0.76092 | 0.76123 | 0.76231 |
+| 0.7 | 0.81277 | 0.81765 | 0.81820 | 0.81936 |
+| 0.9 | 0.85505 | 0.85961 | 0.86020 | 0.86141 |
+| 1.3 | 0.90961 | 0.91364 | 0.91414 | 0.91538 |
+| 1.9 | 0.95058 | 0.95417 | 0.95449 | 0.95572 |
+
+prod_v2 sits 0.5-0.9% below CAMB. The exact flat-LCDM rate sits 0.13-0.14% below it
+at every z, a constant offset from what the flat-LCDM integral leaves out (radiation;
+neutrinos counted as clustering matter). Every catalog and the v28 config hash change.
+
+**Layout on deneb.** One Slurm job, `--cpus-per-task=64 --exclusive` (only deneb has
+64 CPUs), no GPU (the 3050 holds 3 of 7 bins). Two streams, `taskset -c 0-15` and
+`-c 16-31` (the 32 physical cores; SMT siblings idle), each running realizations as
+one process apiece: `logunusual run` -> `logunusual check` -> sha256 into a manifest.
+`sample.default_workers` and the XLA-CPU pool both follow the affinity mask. Existing
+catalogs are skipped (atomic rename: a file with the final name is complete), a failed
+realization is logged and the loop moves on, and three failures in a row stop the
+stream, so the same job resubmitted fills gaps. Output on `/work` (~1.6 TB at
+15.04 GiB per realization). Bitwise reproduction of a catalog needs the same 16-core
+affinity: XLA-CPU's reduction order follows the thread pool.
+
+### Checks and gates
+
+| check | statistic | where |
+|---|---|---|
+| f | `suite` literals equal `fnl.growth_rate_md(z, OMEGA_M_DISTANCE)` to round-off; `growth_rate_md` matches a centred finite difference of `ln growth_md` in `ln a` within the difference's own truncation bound | fast, `tests/test_suite.py` |
+| pre-push | full suite (the slow RSD gates G6/G10 re-run with the new f), format, lint, `m1_reproducibility --n 64` IDENTICAL | laptop |
+| pilot | realizations 0 and 50 together: `check` ok, realized/target inside realization 0's previous range (0.9987-1.0078; same seeds, f moved < 1%), peak RSS < 20 GB per process; per-realization wall and write MB/s recorded, which price the full run | deneb |
+| E1 | 100/100 catalogs pass `check`; one config hash; 700 distinct seeds; 100 manifest entries | `scripts/m5_ensemble.py` |
+| E2 | per bin, the ensemble mean of realized/target nbar is 1 within 3 SE (SE from the scatter over realizations): the lognormal is normalised to its box mean and stationary, so the real-space density's expectation is exactly the target at every point (by symmetry on the periodic box); the radial RSD shift across a curved shell adds `3 sigma_s^2 (rmax - rmin) / (rmax^3 - rmin^3)` (sigma_s the rms radial `f Psi`), <= 1e-4 in every bin and reported; a wrong fsky, a mask-edge bias or a buffer leak shows here | `scripts/m5_ensemble.py` |
 
 ## Known risks / open questions
 
@@ -929,9 +977,6 @@ prod_v2 is retired are JC's call; not scheduled here.
   realized ensemble power is **1.109x the target** (exact, from the clipped P_G,
   2026-10-01); every other shell is exact. Grid sigma^2 of the galaxy field 2.3-3.3,
   matter 0.26-2.8.
-- prod_v2's growth rates come from astropy Planck18 (Om0 = 0.30966) while its distances
-  use Om0 = 0.3153; `suite.py` keeps the literals for drop-in fidelity. Reconciling is an
-  M4 decision.
 - The input P(k) is linear and truncated at kh = 1; the honest reach of the mocks is set
   by the grid (ell ~150-300 sample-weighted at 512^3), see chimera memory
   `project_lognormal_vs_disco_resolution`.
