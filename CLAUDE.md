@@ -76,8 +76,9 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
 ## Code layout (`logunusual/`)
 
 - `suite.py` **[M0]** -- the default bin table `BIN_SUITE_V28` (frozen `Bin`s, now
-  with a `pk_file` name and an optional `pk_galaxy_file`, M4), `seed_for`, the seed base and stride, `RADIAL_BUFFER`, mask
-  constants, distance cosmology. Dependency-free.
+  with a `pk_file` name and an optional `pk_galaxy_file`, M4; `f` literals from
+  `fnl.growth_rate_md`, M5), `seed_for`, the seed base and stride, `RADIAL_BUFFER`,
+  mask constants, distance cosmology. Dependency-free.
 - `grid.py` **[M1]** -- `Box`, k-grids (rfft on z), Hermitian weights, the separable
   `sinc` windows, the CIC shot-noise alias factor (Jing 2005).
 - `pk.py` **[M1, M3]** -- TSV loader + `PowerSpectrum` (log-log cubic spline, power-law
@@ -91,7 +92,8 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
 - `fnl.py` **[M4]** -- local f_NL, LSS convention: `LocalPNG` (f_nl, p, delta_c, and
   the tables' A_s / n_s / k_pivot / omega_m), `poisson_M` (`sqrt(P / P_Phi) / g0`
   from the bin's own table), `delta_b`, `galaxy_spectrum` (exactly `b * b * P_gal`
-  at f_NL = 0; `galaxy_table=` is `P_gal`, M stays on the linear table), `growth_md`, `diagnostics` (`b(k_f)/b`, the k where b(k) changes sign).
+  at f_NL = 0; `galaxy_table=` is `P_gal`, M stays on the linear table), `growth_md`
+  and its exact `growth_rate_md` (the source of `Bin.f`, M5), `diagnostics` (`b(k_f)/b`, the k where b(k) changes sign).
 - `field.py` **[M1, M2, M3, M4]** -- JAX (eager, x64): white noise (numpy PCG64) ->
   Gaussian -> lognormal galaxy and matter fields -> displacement components
   (`psi_axes`, any subset of "xyz"; `Fields.psi` dict, `psi_flat`). `generate_fields`
@@ -284,10 +286,13 @@ them in both directions (G10).
 - Ratios are formed per realization, then averaged; each gate has its own seed range.
 - Bands: kf-shells merged from low k until each holds `n_min_indep(n_real)` independent
   modes (so a Gaussian-scatter SE resolves 2% at 3 sigma); `gates.band_edges`.
-- Growth rate: `Bin.f` are the prod_v2 literals, generated with astropy Planck18
-  (Om0 = 0.30966, 0.06 eV neutrino), NOT the distance cosmology's Om0 = 0.3153; they
-  differ by 0.4-0.9%. Pinned by `tests/test_suite.py`; a deliberate change is an M4
-  decision, not a cleanup.
+- Growth rate: `Bin.f` is the exact linear growth rate of the distance cosmology's
+  flat-LCDM background (Om0 = 0.3153, the CAMB tables' 0.3152), from
+  `fnl.growth_rate_md`, so the velocities and f_NL's `g0` share one background
+  (M5, 2026-10-01). It sits 0.13-0.14% below CAMB's `f sigma8 / sigma8` at every
+  z_eff (radiation and neutrino clustering, which the integral omits). Until M5 these
+  were prod_v2's literals (astropy Planck18 Om0 = 0.30966, `Om^0.55`), 0.5-0.9% low;
+  every catalog and the v28 config hash changed with the switch.
 - The default input P(k) is **linear CAMB truncated at kh = 1.0**; the grid Nyquist
   (0.20-0.40 h/Mpc) binds first. Halofit only pays with a finer grid (M4); the 2x
   grids' corners reach k = 1.39, so they take the kh-10 tables. The kh-10 linear

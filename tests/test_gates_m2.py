@@ -5,12 +5,12 @@ with the SE they produced."""
 import numpy as np
 import pytest
 
-from logunusual import gates, shell
+from logunusual import gates, shell, suite
 from logunusual.grid import Box
 
 pytestmark = pytest.mark.slow
 
-B5, F5 = 1.76, 0.8550542749312783  # bin-5 bias and growth rate (suite.py)
+B5, F5 = suite.BIN_SUITE_V28[4].b, suite.BIN_SUITE_V28[4].f  # bin 5
 BOX = Box(128, 1000.0)  # dx 7.8 Mpc/h, production-like cell
 # bin 5's shell thickness scaled into the box (71 Mpc/h = 9 cells), placed so that a
 # 90 Mpc/h buffer fits under L/2: the field-time bound sqrt(3)/2 dx + f max|Psi| over
