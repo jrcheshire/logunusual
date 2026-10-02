@@ -994,6 +994,66 @@ construction) and a maximum of ~19. The jitter deconvolution of the matter targe
 doubles the densest cells and the tail. The guard takes the GLOBAL max over the
 window, so the most extreme of ~2.4M cells sets every realization's requirement.
 
+### Displacements from the Gaussian linear field: built, measured, rejected (2026-10-01)
+
+Considered (JC chose it, then reverted on the measurement below): `Psi_k = i k / k^2
+delta_lin,k`, `delta_lin,k = rfftn(w) sqrt(P_m / V_cell)`, the Gaussian field on the
+galaxy field's white noise with the matter target `P_m = P / sinc^2`. Same velocity auto
+power, Gaussian tail (max f|Psi| ~19 Mpc/h in bin 1). Built and green (131 tests,
+`delta_g` and real-space catalogs bitwise unchanged), not merged.
+
+**Why not.** For a lognormal, `Cov(delta_g, L) = Cov(G_g, L)` for any Gaussian `L`
+jointly Gaussian with `G_g` (Gaussian integration by parts, up to O(P / V_box) from the
+box-mean normalisation). So `P(delta_g, delta_lin) = sqrt(P_G,g P_m)` exactly (measured:
+128^3, 64 seeds on 32-seed bands, SE <= 0.50%, max |z| 2.35 / 55 bands, linear and halofit
+targets; the lognormal-matter source fails it at |z| 223), and by Cauchy-Schwarz NO
+Gaussian velocity source with the right velocity power correlates with the galaxies
+better than that. The lognormal's Gaussian core `P_G,g` falls below `b^2 P` at low k (the
+mode-coupled power of `log(1 + xi)` has no Gaussian counterpart), so the galaxy-velocity
+cross falls below linear theory exactly where P is small. Exact ensemble values of
+`P(g, velocity source) / (b P_m)` on the production grids (halofit config):
+
+| bin | Gaussian source: k_f / 0.005 / 0.01 / 0.05 / 0.1 | lognormal-matter source (kept) |
+|---|---|---|
+| 1 | 0.938 / 0.917 / 0.938 / 0.891 / 0.801 | 0.983 / 0.979 / 0.983 / 0.966 / 0.954 |
+| 2 | 0.910 / 0.910 / 0.934 / 0.882 / 0.783 | 0.984 / 0.984 / 0.987 / 0.974 / 0.967 |
+| 3 | 0.895 / 0.917 / 0.941 / 0.892 / 0.801 | 0.981 / 0.985 / 0.988 / 0.976 / 0.967 |
+| 4 | 0.874 / 0.920 / 0.940 / 0.897 / 0.809 | 0.979 / 0.986 / 0.989 / 0.979 / 0.971 |
+| 5 | 0.864 / 0.916 / 0.942 / 0.900 / 0.814 | 0.972 / 0.983 / 0.988 / 0.977 / 0.966 |
+| 6 | 0.776 / 0.905 / 0.932 / 0.885 / 0.790 | 0.936 / 0.974 / 0.981 / 0.968 / 0.947 |
+| 7 | 0.684 / 0.876 / 0.921 / 0.867 / 0.753 | 0.860 / 0.949 / 0.968 / 0.945 / 0.896 |
+
+(Gaussian: `sqrt(P_G,g P_m)`; lognormal: `rfftn(expm1(xi_{Gg,Gm}))`, xi_{Gg,Gm} from
+`sqrt(P_G,g P_G,m)`; both shell averages over `b P_m`.) At bin 5, k = 0.01, the Gaussian
+source puts the redshift-space monopole ~1.4% and the quadrupole ~5% below Kaiser
+(~0.3% / ~1% with the lognormal source), scale-dependent and at the f_NL scales. The
+1e-4 of galaxies the lognormal tail displaces > 50 Mpc/h is the cheaper defect. The
+built change is kept outside the repo as a patch.
+
+### Exact buffer guard (JC, 2026-10-01)
+
+The velocities stay continuity on the lognormal matter field. What changes is the
+guard. Under radial RSD a galaxy at `x` lands at radius `|x| + f Psi_c . x_hat`, with
+`|x|` within `r_c +- h` (`h = sqrt(3)/2 dx`) of its cell centre; so an UNDRAWN cell can
+feed the shell only if `r_c - h - f|Psi_c| <= rmax` (`r_c > rmax`) or `r_c + h + f|Psi_c|
+>= rmin` (`r_c < rmin`; a shift through the observer trips the same test). The field's
+requirement is the largest distance from the shell of any cell that can reach it:
+`required_buffer = max(r_c - rmax over reaching outer cells, rmin - r_c over reaching
+inner cells)`, over every cell of the box, and the guard is `buffer >= required_buffer`.
+It is exact under the cell bound (`|Psi_c|` for its radial component, `h` for the
+offset), so a peak deep inside the shell no longer counts: r50's 183.5 Mpc/h cell sits
+at r = 517 in bin 1's [0, 568] shell. The old guard (`h + f max|Psi|` over the window)
+ignored undrawn cells' displacements; this one reads them. `psi_max` (max |Psi| over the
+window) stays in the metadata as a diagnostic; `required_buffer` keeps its name and
+meaning, now exact.
+
+| check | statistic | where |
+|---|---|---|
+| exact | `required_buffer` equals an independent full-grid computation of the same condition | fast, `tests/test_shell.py` |
+| complete | with `buffer = required_buffer`, no point of any undrawn cell (corners and interior samples, shifted by its cell's Psi) lands in the shell; with a planted large Psi the guard raises iff `buffer < required_buffer` | fast, `tests/test_shell.py` |
+| scope | a large Psi in a drawn cell inside the shell does not raise; the same Psi in an undrawn cell next to the window does | fast, `tests/test_shell.py` |
+| re-pilot | realizations 0 and 50 on deneb pass; required_buffer per bin recorded | deneb |
+
 ## Known risks / open questions
 
 - The prod_v2 1.28x over-density is consistent with the LogNormalGalaxies 0.9.4 -> 0.10
