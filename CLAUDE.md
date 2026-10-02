@@ -108,8 +108,8 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
 - `sample.py` **[M1, M3]** -- numpy: intensity, per-slab RNG streams (`slab_rng`,
   `draw_slab`: Poisson then uniform-in-cell placement on one x-slab's own stream),
   own-cell plane-parallel RSD, `split_seed`, `default_workers`.
-- `shell.py` **[M2, M3]** -- `Shell` (rmin, rmax, buffer; `check_box`,
-  `required_buffer`), observer-centred `cell_window` / `slab_window` (radial window
+- `shell.py` **[M2, M3, M5]** -- `Shell` (rmin, rmax, buffer; `check_box`,
+  `required_buffer`, exact for the field, M5), observer-centred `cell_window` / `slab_window` (radial window
   and the angular pre-cut per slab), `AngularMask` (HEALPix h5, NESTED or RING, any
   NSIDE; `distance_to_set`), `select`, `rsd_radial`, `radial_histogram`, and the
   threaded `sample_shell` generator with `ShellStats`.
@@ -189,7 +189,8 @@ Grid `N^3`, box `L`, `dx = L/N`, `V_cell = dx^3`; cell centres at `(i + 0.5) dx`
    `configs/v28_halofit.yaml`. Finer grids were measured and dropped (ROADMAP M4): at
    2x a lognormal cannot reach halofit in bins 1-3 (grid sigma^2 15-20), and on every
    finer grid tried one extreme matter peak drives `f max|Psi|` past the 150 Mpc/h
-   buffer (bulk |Psi| unchanged).
+   buffer (bulk |Psi| unchanged; measured under the window-max guard, before M5's
+   exact guard).
 
 **Why not the Julia construction.** Henry's 0.11.0 applies a `sinc^-p` deconvolution
 to the lognormal field AFTER exponentiation. Measured here at bin-5 settings (128^3,
@@ -223,15 +224,17 @@ multiplied at cell level by the full-sky window `r_lo <= |x_centre| <= r_hi` wit
 periodic and unwindowed, so the grid identity (G3) is untouched. Each galaxy is
 displaced radially by its own cell's displacement, `s = x + f (Psi . x / r^2) x`, then
 kept iff `rmin <= |s| <= rmax` (inclusive) and, with a mask, the HEALPix pixel of `s`
-is set (`hp.vec2pix`). No periodic wrap after the shift (a galaxy can only leave the box
-from a buffer cell touching a face and is outside the shell either way; the count is
+is set (`hp.vec2pix`). No periodic wrap after the shift (a galaxy that leaves the box
+is beyond `L/2 >= rmax + buffer`, outside the shell either way; the count is
 reported). The buffer must exceed a cell diagonal and `rmax + buffer <= L/2`
-(`Shell.check_box`, config time) AND, for the realized field, `sqrt(3)/2 dx +
-f max|Psi|` over the drawn cells (`Shell.required_buffer`; `sample_shell` raises
-below it and records `psi_max` / `required_buffer` per bin). The production 150 Mpc/h
-covers bin 2's ~113-128 (the lognormal displacement tail: `max|Psi|` 150-175 Mpc/h
-at 256^3 against `psi_rms` 5); test fixtures with 20 Mpc/h were short and were
-resized (2026-09-20). With a mask, the **angular pre-cut** (`slab_window`) drops the
+(`Shell.check_box`, config time) AND cover the realized field's exact requirement
+(`Shell.required_buffer`, M5): the largest distance from the shell of any cell, over
+the whole box, whose galaxies can reach it, `r_c -+ (sqrt(3)/2 dx + f |Psi_c|)`;
+`sample_shell` raises below it and records `required_buffer` and the window's
+`psi_max` per bin. A displacement inside the drawn window never counts. Until M5 the
+guard was the bound `sqrt(3)/2 dx + f max|Psi|` over the window: the lognormal
+matter field's densest cells put that at 113-190 Mpc/h in bins 1-3 (max f|Psi| 20-30x
+the rms), which failed realization 50 in bin 1 against the 150 buffer (ROADMAP M5). With a mask, the **angular pre-cut** (`slab_window`) drops the
 cells whose galaxies cannot land in a set pixel: radial RSD keeps direction, so the
 test is `AngularMask.distance_to_set` at the cell centre's pixel against
 `cell_angular_radius(r_c) + 2 max_pixrad` -- an exact superset of the feeding cells

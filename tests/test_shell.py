@@ -277,37 +277,117 @@ def test_sample_shell_is_the_same_for_any_thread_count(spectrum, mask, workers):
     assert sa.n_kept > 0
 
 
-def test_buffer_guard_uses_the_field_and_trips_on_a_large_displacement(spectrum):
-    box = Box(16, 160.0)  # dx 10, half diagonal 8.66
-    s = shell.Shell(20.0, 40.0, 35.0)
+def _guard_fixture(spectrum):
+    box = Box(16, 160.0)  # dx 10, half diagonal 8.66; observer-centred, L/2 = 80
     F = field.generate_fields(spectrum, 1.5, box, 41, psi_axes="xyz")
-    f = 0.8
+    return box, F, 0.8
+
+
+def _required_full_grid(box, s, f, psi):
+    """`Shell.required_buffer` written independently, on the full grid."""
+    r = shell.cell_radius(box).reshape(-1)
+    reach = 0.5 * np.sqrt(3.0) * box.dx + f * np.sqrt((psi**2).sum(1))
+    outer = (r > s.rmax) & (r - reach <= s.rmax)
+    inner = (r < s.rmin) & (r + reach >= s.rmin)
+    d = np.concatenate([r[outer] - s.rmax, s.rmin - r[inner], [0.0]])
+    return float(d.max())
+
+
+def _plant(F, cell, value):
+    big = np.asarray(F.psi["x"]).copy()
+    big[np.unravel_index(cell, F.box.shape)] = value
+    F.psi["x"] = big
+
+
+def test_required_buffer_is_the_exact_feeding_condition(spectrum):
+    box, F, f = _guard_fixture(spectrum)
+    s = shell.Shell(20.0, 40.0, 35.0)
     psi = F.psi_flat("xyz")
-    W = shell.cell_window(box, s).reshape(-1)
-    psi_max = np.sqrt((psi[W] ** 2).sum(1)).max()
-    need = 0.5 * np.sqrt(3.0) * box.dx + f * psi_max
-    assert shell.Shell.required_buffer(box, f, psi_max) == need
-    assert 20.0 < need < 35.0, need  # a 20 buffer would NOT have covered this field
+    need = s.required_buffer(box, f, psi)
+    assert need == pytest.approx(_required_full_grid(box, s, f, psi), rel=1e-13)
+    assert 0.5 * np.sqrt(3.0) * box.dx < need < 35.0, need
     st = None
     for _, st in shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1):
         pass
-    assert st.psi_max == psi_max and st.required_buffer == need
-    # one window cell with a huge displacement: the guard raises, naming the need
-    i, j, k = np.unravel_index(np.flatnonzero(W)[0], box.shape)
-    big = np.asarray(F.psi["x"]).copy()
-    big[i, j, k] = 100.0
-    F.psi["x"] = big
-    with pytest.raises(ValueError, match="radial buffer 35 Mpc/h is below the 8"):
-        list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
-    # a cell OUTSIDE the window does not count
-    out = np.unravel_index(np.flatnonzero(~W)[0], box.shape)
-    big[i, j, k] = np.asarray(F.psi["y"])[i, j, k]
-    big[out] = 100.0
-    list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
-    # without RSD nothing moves: only the half diagonal is needed
+    W = shell.cell_window(box, s).reshape(-1)
+    assert st.psi_max == np.sqrt((psi[W] ** 2).sum(1)).max()
+    assert st.required_buffer == need
+    # without RSD only the cell extent matters: at most the half diagonal
+    nr = s.required_buffer(box, f, None)
+    assert nr == pytest.approx(_required_full_grid(box, s, 0.0, 0.0 * psi), rel=1e-13)
+    assert 0.0 < nr <= 0.5 * np.sqrt(3.0) * box.dx
     for _, st in shell.sample_shell(F, s, None, 5e-3, 42, f=f, rsd=False, n_workers=1):
         pass
-    assert st.psi_max == 0.0 and st.required_buffer == 0.5 * np.sqrt(3.0) * box.dx
+    assert st.psi_max == 0.0 and st.required_buffer == nr
+
+
+def test_no_undrawn_cell_reaches_the_shell_at_the_required_buffer(spectrum):
+    # Plant radial displacements in undrawn cells on both sides of the shell (outward
+    # inside it, inward beyond it), set the buffer to exactly the requirement, and move
+    # points of EVERY undrawn cell (its corners and interior samples) by the radial RSD
+    # map: none may land in the shell.
+    box, F, f = _guard_fixture(spectrum)
+    base = shell.Shell(40.0, 52.0, 18.0)  # r_lo 22, r_hi 70: undrawn cells both sides
+    r = shell.cell_radius(box).reshape(-1)
+    c1 = shell.cell_centres_1d(box)
+    # only the planted cells move, so each side's requirement is theirs alone (the
+    # fixture field's own Psi needs 25.9 outside, which would hide the inner side)
+    psi3 = {a: np.zeros(box.shape) for a in "xyz"}
+    inner = np.flatnonzero((r > 16.0) & (r < 17.0))[
+        :4
+    ]  # r 16.6: f|Psi| >= 14.8 reaches 40
+    outer = np.flatnonzero((r > 71.0) & (r < 72.0))[
+        :4
+    ]  # r 71.2: f|Psi| >= 10.6 reaches 52
+    assert inner.size == 4 and outer.size == 4  # the fixture plants on both sides
+    assert base.required_buffer(box, f, None) < 40.0 - 16.6  # the inner side binds
+    for cells, v in ((inner, 28.0), (outer, -24.0)):
+        for cell in cells:
+            ijk = np.unravel_index(cell, box.shape)
+            x = np.array([c1[q] for q in ijk])
+            for a, comp in zip("xyz", v * x / np.linalg.norm(x)):
+                psi3[a][ijk] = comp
+    F.psi.update(psi3)
+    psi = F.psi_flat("xyz")
+    need = base.required_buffer(box, f, psi)
+    s = shell.Shell(base.rmin, base.rmax, need)
+    s.check_box(box)
+    undrawn = np.flatnonzero(~shell.cell_window(box, s).reshape(-1))
+    assert set(inner) <= set(np.flatnonzero(shell.cell_window(box, s).reshape(-1)))
+    rng = np.random.default_rng(0)
+    corners = np.array(np.meshgrid(*[[-0.5, 0.5]] * 3, indexing="ij")).reshape(3, -1).T
+    # corners pulled a hair inside: one cell corner is the observer, where r = 0
+    offsets = np.concatenate([corners * (1 - 1e-9), rng.uniform(-0.5, 0.5, (64, 3))])
+    offsets = offsets * box.dx
+    idx = np.array(np.unravel_index(undrawn, box.shape)).T
+    for cell, (i, j, k) in zip(undrawn, idx):
+        x = np.array([c1[i], c1[j], c1[k]]) + offsets
+        rx = np.linalg.norm(x, axis=1)
+        sx = np.abs(rx + f * (x @ psi[cell]) / rx)  # |s| under radial RSD
+        assert not np.any((sx >= s.rmin) & (sx <= s.rmax)), (cell, sx.min(), sx.max())
+    # the guard holds exactly at the requirement and raises just below it
+    list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
+    short = shell.Shell(base.rmin, base.rmax, need * (1.0 - 1e-9))
+    with pytest.raises(ValueError, match="this field needs"):
+        list(shell.sample_shell(F, short, None, 5e-3, 42, f=f, n_workers=1))
+
+
+def test_a_large_displacement_counts_only_where_it_can_feed_the_shell(spectrum):
+    box, F, f = _guard_fixture(spectrum)
+    s = shell.Shell(20.0, 40.0, 35.0)
+    r = shell.cell_radius(box).reshape(-1)
+    need0 = s.required_buffer(box, f, F.psi_flat("xyz"))
+    # inside the shell, far from both edges: drawn, so it cannot change the need
+    inside = np.flatnonzero((r > 28.0) & (r < 32.0))[0]
+    _plant(F, inside, 100.0)
+    assert s.required_buffer(box, f, F.psi_flat("xyz")) == need0
+    list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
+    # the same displacement in an undrawn cell beyond the window: it raises
+    _plant(F, inside, 0.0)
+    outside = np.flatnonzero((r > s.r_hi) & (r < s.r_hi + 5.0))[0]
+    _plant(F, outside, 100.0)
+    with pytest.raises(ValueError, match="radial buffer 35 Mpc/h is below the"):
+        list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
 
 
 def test_mask_dilation_is_the_centre_distance_set():
