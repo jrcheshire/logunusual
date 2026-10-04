@@ -229,7 +229,11 @@ is beyond `L/2 >= rmax + buffer`, outside the shell either way; the count is
 reported). The buffer must exceed a cell diagonal and `rmax + buffer <= L/2`
 (`Shell.check_box`, config time) AND cover the realized field's exact requirement
 (`Shell.required_buffer`, M5): the largest distance from the shell of any cell, over
-the whole box, whose galaxies can reach it, `r_c -+ (sqrt(3)/2 dx + f |Psi_c|)`;
+the whole box, whose galaxies can reach it. The test is the SIGNED line-of-sight shift
+(`reach_interval`, 2026-10-03): `|s| = | |x| + f Psi_c . x_hat |` bounded over the cell
+by `|x|` in `r_c +- h` and `f Psi_c . x_hat` in `f Psi_c . c_hat +- |f||Psi_c| chi`
+(`chi` the chord the cell subtends), so an outward or tangential displacement beyond
+the shell, or an inward one that overshoots the observer, does not count;
 `sample_shell` raises below it and records `required_buffer` and the window's
 `psi_max` per bin. A displacement inside the drawn window never counts. Until M5 the
 guard was the bound `sqrt(3)/2 dx + f max|Psi|` over the window: the lognormal

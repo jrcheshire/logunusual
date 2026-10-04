@@ -283,14 +283,60 @@ def _guard_fixture(spectrum):
     return box, F, 0.8
 
 
+def _centres(box):
+    c1 = shell.cell_centres_1d(box)
+    return np.stack(np.meshgrid(c1, c1, c1, indexing="ij"), -1).reshape(-1, 3)
+
+
 def _required_full_grid(box, s, f, psi):
-    """`Shell.required_buffer` written independently, on the full grid."""
+    """`Shell.required_buffer` (the line-of-sight interval test) written
+    independently, on the full grid."""
+    X = _centres(box)
+    r = np.linalg.norm(X, axis=1)
+    h = 0.5 * np.sqrt(3.0) * box.dx
+    proj = f * np.einsum("ij,ij->i", psi, X) / r
+    m = abs(f) * np.linalg.norm(psi, axis=1)
+    theta = np.arcsin(np.clip(h / r, 0.0, 1.0))
+    chi = np.where(r > h, 2.0 * np.sin(theta / 2.0), 2.0)
+    rho = np.stack(
+        [
+            np.maximum(r - h, 0.0) + np.clip(proj - m * chi, -m, m),
+            r + h + np.clip(proj + m * chi, -m, m),
+        ]
+    )
+    s_hi = np.abs(rho).max(0)
+    s_lo = np.where(rho[0] * rho[1] <= 0.0, 0.0, np.abs(rho).min(0))
+    reach = (s_hi >= s.rmin) & (s_lo <= s.rmax)
+    d = np.concatenate(
+        [r[reach & (r > s.rmax)] - s.rmax, s.rmin - r[reach & (r < s.rmin)], [0.0]]
+    )
+    return float(d.max())
+
+
+def _required_magnitude_bound(box, s, f, psi):
+    """The guard before the line-of-sight test: radial shift bounded by `f|Psi_c|`."""
     r = shell.cell_radius(box).reshape(-1)
     reach = 0.5 * np.sqrt(3.0) * box.dx + f * np.sqrt((psi**2).sum(1))
     outer = (r > s.rmax) & (r - reach <= s.rmax)
     inner = (r < s.rmin) & (r + reach >= s.rmin)
     d = np.concatenate([r[outer] - s.rmax, s.rmin - r[inner], [0.0]])
     return float(d.max())
+
+
+def _landing_radii(box, cell_xyz, psi_c, f, offsets):
+    """`|s|` under radial RSD for points `cell_xyz + offsets` of one cell."""
+    x = cell_xyz + offsets
+    rx = np.linalg.norm(x, axis=1)
+    return np.abs(rx + f * (x @ psi_c) / rx)
+
+
+def _cell_offsets(box, rng, n_interior=64):
+    corners = np.array(np.meshgrid(*[[-0.5, 0.5]] * 3, indexing="ij")).reshape(3, -1).T
+    # corners pulled a hair inside: one cell corner is the observer, where r = 0
+    return (
+        np.concatenate([corners * (1 - 1e-9), rng.uniform(-0.5, 0.5, (n_interior, 3))])
+        * box.dx
+    )
 
 
 def _plant(F, cell, value):
@@ -354,22 +400,93 @@ def test_no_undrawn_cell_reaches_the_shell_at_the_required_buffer(spectrum):
     s.check_box(box)
     undrawn = np.flatnonzero(~shell.cell_window(box, s).reshape(-1))
     assert set(inner) <= set(np.flatnonzero(shell.cell_window(box, s).reshape(-1)))
-    rng = np.random.default_rng(0)
-    corners = np.array(np.meshgrid(*[[-0.5, 0.5]] * 3, indexing="ij")).reshape(3, -1).T
-    # corners pulled a hair inside: one cell corner is the observer, where r = 0
-    offsets = np.concatenate([corners * (1 - 1e-9), rng.uniform(-0.5, 0.5, (64, 3))])
-    offsets = offsets * box.dx
+    offsets = _cell_offsets(box, np.random.default_rng(0))
     idx = np.array(np.unravel_index(undrawn, box.shape)).T
     for cell, (i, j, k) in zip(undrawn, idx):
-        x = np.array([c1[i], c1[j], c1[k]]) + offsets
-        rx = np.linalg.norm(x, axis=1)
-        sx = np.abs(rx + f * (x @ psi[cell]) / rx)  # |s| under radial RSD
+        sx = _landing_radii(box, np.array([c1[i], c1[j], c1[k]]), psi[cell], f, offsets)
         assert not np.any((sx >= s.rmin) & (sx <= s.rmax)), (cell, sx.min(), sx.max())
     # the guard holds exactly at the requirement and raises just below it
     list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
     short = shell.Shell(base.rmin, base.rmax, need * (1.0 - 1e-9))
     with pytest.raises(ValueError, match="this field needs"):
         list(shell.sample_shell(F, short, None, 5e-3, 42, f=f, n_workers=1))
+
+
+def test_line_of_sight_guard_is_complete_for_any_direction(spectrum):
+    # Random-direction displacements in undrawn cells on both sides of the shell: at
+    # buffer = requirement no point of any undrawn cell lands in the shell, and the
+    # requirement never exceeds the f|Psi_c| bound.
+    box, _, f = _guard_fixture(spectrum)
+    base = shell.Shell(40.0, 52.0, 18.0)
+    X = _centres(box)
+    r = np.linalg.norm(X, axis=1)
+    rng = np.random.default_rng(5)
+    band = np.flatnonzero((r < 30.0) | ((r > 60.0) & (r < 100.0)))
+    v = rng.standard_normal((band.size, 3))
+    v *= rng.uniform(0.0, 30.0, (band.size, 1)) / np.linalg.norm(v, axis=1)[:, None]
+    psi = np.zeros((r.size, 3))
+    psi[band] = v
+    need = base.required_buffer(box, f, psi)
+    assert need == pytest.approx(_required_full_grid(box, base, f, psi), rel=1e-13)
+    old = _required_magnitude_bound(box, base, f, psi)
+    assert need <= old
+    s = shell.Shell(base.rmin, base.rmax, need)
+    undrawn = np.flatnonzero(~shell.cell_window(box, s).reshape(-1))
+    assert np.intersect1d(undrawn, band).size > 0  # some plants stay undrawn
+    offsets = _cell_offsets(box, np.random.default_rng(6))
+    for cell in undrawn:
+        sx = _landing_radii(box, X[cell], psi[cell], f, offsets)
+        assert not np.any((sx >= s.rmin) & (sx <= s.rmax)), (cell, sx.min(), sx.max())
+
+
+def test_line_of_sight_guard_counts_a_tangential_displacement_through_the_chord():
+    # A displacement perpendicular to the centre's line of sight has no radial
+    # component at the centre, but off-centre points of the cell see part of it. Size
+    # the shell so a point of the cell lands inside while the cell's nearest radius
+    # (r_c - h) is beyond rmax: only the chord term can admit the cell.
+    box = Box(16, 160.0)
+    f = 0.8
+    X = _centres(box)
+    cell = int(np.flatnonzero(np.all(X == [65.0, 5.0, 5.0], axis=1))[0])
+    c = X[cell]
+    h = 0.5 * np.sqrt(3.0) * box.dx
+    psi_c = np.cross(c, [0.0, 0.0, 1.0])
+    psi_c *= 100.0 / np.linalg.norm(psi_c)
+    assert abs(psi_c @ c) < 1e-9
+    offsets = _cell_offsets(box, np.random.default_rng(7), n_interior=4096)
+    rho_min = _landing_radii(box, c, psi_c, f, offsets).min()
+    r_c = np.linalg.norm(c)
+    assert rho_min < r_c - h  # the tangential shift reaches further in than r_c - h
+    rmax = 0.5 * (rho_min + r_c - h)
+    s = shell.Shell(rmax - 20.0, rmax, 0.0)
+    psi = np.zeros((X.shape[0], 3))
+    psi[cell] = psi_c
+    need = s.required_buffer(box, f, psi)
+    assert need == pytest.approx(r_c - rmax, rel=1e-12)
+    assert need == pytest.approx(_required_full_grid(box, s, f, psi), rel=1e-13)
+
+
+def test_an_outward_displacement_beyond_the_window_does_not_count(spectrum):
+    box, F, f = _guard_fixture(spectrum)
+    s = shell.Shell(20.0, 40.0, 35.0)
+    X = _centres(box)
+    r = np.linalg.norm(X, axis=1)
+    need0 = s.required_buffer(box, f, F.psi_flat("xyz"))
+    outside = np.flatnonzero((r > s.r_hi) & (r < s.r_hi + 5.0))[0]
+    ijk = np.unravel_index(outside, box.shape)
+    for sign, raises in ((+1.0, False), (-1.0, True)):
+        # 60 inward from r 79 lands in the shell; 100 would overshoot the observer
+        for a, comp in zip("xyz", sign * 60.0 * X[outside] / r[outside]):
+            F.psi[a] = np.asarray(F.psi[a]).copy()
+            F.psi[a][ijk] = comp
+        need = s.required_buffer(box, f, F.psi_flat("xyz"))
+        if raises:
+            assert need > s.buffer
+            with pytest.raises(ValueError, match="this field needs"):
+                list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
+        else:
+            assert need == need0
+            list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
 
 
 def test_a_large_displacement_counts_only_where_it_can_feed_the_shell(spectrum):
@@ -379,13 +496,14 @@ def test_a_large_displacement_counts_only_where_it_can_feed_the_shell(spectrum):
     need0 = s.required_buffer(box, f, F.psi_flat("xyz"))
     # inside the shell, far from both edges: drawn, so it cannot change the need
     inside = np.flatnonzero((r > 28.0) & (r < 32.0))[0]
-    _plant(F, inside, 100.0)
+    _plant(F, inside, 60.0)
     assert s.required_buffer(box, f, F.psi_flat("xyz")) == need0
     list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
-    # the same displacement in an undrawn cell beyond the window: it raises
+    # the same displacement in an undrawn cell beyond the window (centre
+    # (-75, -25, -5): +x is inward, f Psi . c_hat = -45, landing near r 34): it raises
     _plant(F, inside, 0.0)
     outside = np.flatnonzero((r > s.r_hi) & (r < s.r_hi + 5.0))[0]
-    _plant(F, outside, 100.0)
+    _plant(F, outside, 60.0)
     with pytest.raises(ValueError, match="radial buffer 35 Mpc/h is below the"):
         list(shell.sample_shell(F, s, None, 5e-3, 42, f=f, n_workers=1))
 

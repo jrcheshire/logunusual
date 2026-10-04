@@ -1070,6 +1070,45 @@ streams: 96-99 s per realization (79 s alone), peak RSS 11.5-11.9 GB, `/work` wr
 300-316 MB/s while both stream (the array's ~325), and sha256 read-back 45 s per
 catalog (not from page cache).
 
+### Full run (deneb job 2082, commit `bc60355`, 2026-10-01)
+
+91 of 100 realizations written, checked and in the manifest (1.4 TB); 84-85 s per
+realization late in the run. **9 failed the guard against the 150 Mpc/h buffer**
+(`required_buffer`, Mpc/h; box room `L/2 - rmax` in brackets):
+
+| bin (room) | realizations |
+|---|---|
+| 1 (181.8) | r2 150.9, r11 152.2, r21 168.6, r24 284.9, r48 276.7 |
+| 2 (172.2) | r55 155.1, r49 178.0, r82 205.8 |
+| 3 (219.3) | r29 151.3 |
+
+r24, r48, r49 and r82 exceed their box room, so no buffer on the v28 boxes covers the
+ensemble. The cause is the displacement tail above (continuity on the lognormal
+matter field's densest cells), not the guard.
+
+### Line-of-sight guard (JC, 2026-10-03)
+
+The exact guard bounds a galaxy's radial shift by `f|Psi_c|`; the shift is the signed
+line-of-sight component `f Psi_c . x_hat`. For `x` in cell `c` (`|x - c| <= h`):
+`|x|` lies in `[max(r_c - h, 0), r_c + h]`, and `x_hat` within the chord
+`chi = 2 sin(theta/2)`, `sin theta = h / r_c`, of `c_hat` (`chi = 2` when `r_c <= h`),
+so `f Psi_c . x_hat` lies in `[a - m chi, a + m chi]` clipped to `[-m, m]`, with
+`a = f Psi_c . c_hat`, `m = |f| |Psi_c|`. Hence `rho = |x| + f Psi_c . x_hat` lies in an
+interval `[rho_lo, rho_hi]` and `|s| = |rho|` in `[0 or min(|rho_lo|, |rho_hi|),
+max(|rho_lo|, |rho_hi|)]`; a cell can feed the shell iff that range meets
+`[rmin, rmax]`. `required_buffer` keeps its definition over the reaching cells. Every
+cell this admits the old test admitted, so the requirement never rises; without RSD it
+is unchanged. A cell beyond `rmax` displaced outward, or tangentially by less than its
+gap over `chi`, no longer counts. Catalogs and the config hash are unchanged (the
+guard only raises); `required_buffer` in new metadata is the line-of-sight value.
+
+| check | statistic | where |
+|---|---|---|
+| exact | equals an independent full-grid computation of the same interval test | fast, `tests/test_shell.py` |
+| complete | random-direction displacements planted in undrawn cells on both sides, buffer = requirement: no corner or interior point of any undrawn cell lands in the shell; a tangential plant sized so only the chord term admits it is counted, and dropping the chord term fails this test | fast, `tests/test_shell.py` |
+| no rise | never above the `f|Psi_c|` requirement (fixture field and planted fields) | fast, `tests/test_shell.py` |
+| scope | an outward displacement beyond the window does not raise; the same displacement inward does | fast, `tests/test_shell.py` |
+
 ## Known risks / open questions
 
 - The prod_v2 1.28x over-density is consistent with the LogNormalGalaxies 0.9.4 -> 0.10
