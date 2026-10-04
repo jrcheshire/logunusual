@@ -1109,6 +1109,71 @@ guard only raises); `required_buffer` in new metadata is the line-of-sight value
 | no rise | never above the `f|Psi_c|` requirement (fixture field and planted fields) | fast, `tests/test_shell.py` |
 | scope | an outward displacement beyond the window does not raise; the same displacement inward does | fast, `tests/test_shell.py` |
 
+### Capping the velocity source: measurement (planned 2026-10-03)
+
+Linear continuity is valid where `delta_m << 1`; on the lognormal's densest cells it
+manufactures displacements of 150-300 Mpc/h (a peak acts as a point mass,
+`Psi ~ delta dx^3 / (4 pi d^2)`). Candidate: compute Psi from a capped copy of the
+matter field, leaving `delta_g`, `delta_m` and the real-space catalog bitwise
+unchanged. Two arms, per bin `delta_max(nu) = exp(nu sigma_G - sigma_G^2 / 2) - 1`
+(`sigma_G^2 = log1p(sigma2)` of the bin's matter target, so one `nu` is one
+significance of each bin's Gaussian field):
+- **plain**: `min(delta_m, delta_max)`. Removes mass m from each peak, which shifts
+  every mode by `-(m/V) e^{-ik.x0}`; the cross term with the field is ~`2m/sqrt(PV)`
+  per mode (percent level at `k_f` for an r50-like peak), biased low on average
+  because peaks sit in large-scale overdensities.
+- **mass-conserving**: the excess above `delta_max` is spread over a lattice sphere of
+  radius R cells (normalised top-hat, FFT convolution, periodic). The total is
+  conserved exactly, the change in `delta_k` is `e_k (W_R(k) - 1)`, O(k^2 R^2) at low
+  k, and outside R the displacement of a spherically spread excess is unchanged (Gauss;
+  approximate on the lattice).
+
+Sweep `nu` in {5.0, 4.5, 4.0} for both arms, R in {1, 2} cells for mass-conserving,
+plus the uncapped baseline (JC, 2026-10-03, revised from {4.5, 4.0, 3.5} x {2, 3} after
+the laptop rehearsal below). The excess is spread by scatter-add over the sphere's
+cells (identical to an FFT top-hat convolution to 4e-16 in the ratios; mass residual
+~1e-16). Reported per (realization, bin, arm), `scripts/m5_cap.py`:
+
+| statistic | role |
+|---|---|
+| `required_buffer` (line-of-sight guard) and the `f|Psi_c|` bound | does the arm fit the buffer / box room |
+| cells capped, mass moved (fraction of the box total), max of the source field after the cap, expected galaxies in the radial window whose `f|Psi|` moves by > 1 Mpc/h | how much the arm touches |
+| per k_f shell, `P(delta_g, delta_src) / P(delta_g, delta_m)` | **the criterion** (JC): Psi is curl-free from `delta_src`, so its divergence is `-delta_src` and the galaxy-velocity cross power is this ratio times the uncapped one; matched fields, so no sampling noise |
+| per k_f shell, `P(delta_src) / P(delta_m)` | the velocity auto (mu^4) term, reported only |
+
+Seeds: the ratio statistics on realizations 0-19 (unselected), all seven bins; the
+requirement additionally on the nine failures of job 2082 (bins 1-3), which are
+selected for extreme peaks and do not enter any ensemble mean. Self-checks on every
+field: `nu = inf` reproduces production Psi bitwise; the mass-conserving source keeps
+the field's sum to round-off; the line-of-sight requirement never exceeds the
+magnitude bound. The pass bar on the ratio is derived from these numbers and agreed
+before any production change.
+
+Predictions: plain arm, ratio scatter of order a percent at k_f per realization with
+a mean below 1; mass-conserving arm, ratio within ~1e-4 of 1 below k ~ 0.02; R = 3 at
+nu ~ 4 brings every seed under 150 Mpc/h (least certain: the requirement near a peak
+should fall as (dx/R)^2).
+
+**Laptop rehearsal (2026-10-03, bin 1, realizations 2 and 0, original sweep).** r2's
+uncapped `f|Psi_c|` requirement is 150.9, job 2082's logged value (the instrument is
+the production field); the line-of-sight guard also gives 150.9 (r2's offending
+displacement is radial). Cross ratio minus 1 / requirement (Mpc/h):
+
+| arm (r2) | delta_max | cells capped | k_f | k 0.1 | k 0.2 | k 0.3 | requirement |
+|---|---|---|---|---|---|---|---|
+| none | | | | | | | 150.9 |
+| plain nu 4.5 | 92.6 | 18 | -4.5e-3 | -3.1e-3 | -6.6e-3 | -9.0e-3 | 47.7 |
+| mass nu 4.5 R2 | 92.6 | 18 | -3.4e-6 | -7.0e-4 | -4.5e-3 | -9.2e-3 | 47.7 |
+| mass nu 4.0 R2 | 51.5 | 236 | -8.2e-6 | -2.6e-3 | -1.5e-2 | -3.2e-2 | 33.3 |
+| mass nu 3.5 R3 | 28.4 | 1697 | -2.8e-5 | -1.7e-2 | -6.5e-2 | -8.9e-2 | 27.9 |
+
+r0 (uncapped 63.7) caps to 56.9 at nu 4.5 and 4.0 alike: past the peaks, ordinary
+structure sets the requirement. The mass-conserving arm keeps low k to ~1e-5 as
+predicted; every cap costs velocity power at high k, more for lower nu and larger R
+(R = 3 is worse than R = 2 at every k for the same requirement), hence the revised
+sweep. Memory ~290 B/cell at the sweep's peak (192^3, 256^3), ~38 GB at 512^3: one
+process at a time on deneb.
+
 ## Known risks / open questions
 
 - The prod_v2 1.28x over-density is consistent with the LogNormalGalaxies 0.9.4 -> 0.10
