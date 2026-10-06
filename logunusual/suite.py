@@ -26,8 +26,10 @@ from dataclasses import dataclass
 SEED_BASE = 137_000_000
 SEED_REALIZATION_STRIDE = 1000
 
-#: Buffer (Mpc/h) added on both sides of each shell when the box is drawn.
-RADIAL_BUFFER = 150.0
+#: Buffer (Mpc/h) added on both sides of each shell when the box is drawn. The boxes
+#: were sized for 150; 160 (M5) covers the displacement tail of the 100-realization
+#: ensemble and leaves >= 12 Mpc/h of box room in every bin.
+RADIAL_BUFFER = 160.0
 
 #: Distance cosmology behind rmin/rmax and the matter-power tables.
 H0_DISTANCE = 67.36

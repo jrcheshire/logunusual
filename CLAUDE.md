@@ -238,7 +238,10 @@ the shell, or an inward one that overshoots the observer, does not count;
 `psi_max` per bin. A displacement inside the drawn window never counts. Until M5 the
 guard was the bound `sqrt(3)/2 dx + f max|Psi|` over the window: the lognormal
 matter field's densest cells put that at 113-190 Mpc/h in bins 1-3 (max f|Psi| 20-30x
-the rms), which failed realization 50 in bin 1 against the 150 buffer (ROADMAP M5). With a mask, the **angular pre-cut** (`slab_window`) drops the
+the rms), which failed realization 50 in bin 1 against the 150 buffer (ROADMAP M5).
+The default buffer is 160 Mpc/h since M5 (2026-10-06): under the line-of-sight guard
+the worst of the 100 M5 realizations needs 150.9 (bin 1), and capping the velocity
+source to shrink the tail was measured and not adopted (ROADMAP M5). With a mask, the **angular pre-cut** (`slab_window`) drops the
 cells whose galaxies cannot land in a set pixel: radial RSD keeps direction, so the
 test is `AngularMask.distance_to_set` at the cell centre's pixel against
 `cell_angular_radius(r_c) + 2 max_pixrad` -- an exact superset of the feeding cells

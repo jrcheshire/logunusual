@@ -1174,6 +1174,57 @@ predicted; every cap costs velocity power at high k, more for lower nu and large
 sweep. Memory ~290 B/cell at the sweep's peak (192^3, 256^3), ~38 GB at 512^3: one
 process at a time on deneb.
 
+**Result (deneb job 2111, commit `ce0d153`, 2026-10-05): not adopted.** 161 rows (the
+nine 2082 failures in bins 1-3; realizations 0-19 in all seven bins), 2.1 h, peak RSS
+18.7 GB. Every field passed the self-checks (`nu = inf` bitwise, mass residual
+<= 1e-15, line of sight <= bound), and the uncapped `f|Psi_c|` requirement reproduces
+2082's logged values for all nine to 0.05 Mpc/h.
+
+**The line-of-sight guard alone clears 8 of the 9** (uncapped requirement, Mpc/h):
+
+| bin | realization: 2082's `f|Psi_c|` guard -> line of sight |
+|---|---|
+| 1 | r2 150.9 -> 150.9, r11 152.2 -> 80.0, r21 168.6 -> 52.6, r24 284.9 -> 74.8, r48 276.7 -> 43.8 |
+| 2 | r55 155.1 -> 44.2, r49 178.0 -> 62.0, r82 205.8 -> 70.8 |
+| 3 | r29 151.3 -> 75.0 |
+
+The 91 realizations that passed 2082 pass the line-of-sight guard too (it never
+exceeds the old one), so uncapped, 1 of the 100 needs more than 150: r2 in bin 1, by
+0.9 Mpc/h. Worst uncapped line-of-sight requirement over all rows, bins 1-7: 150.9,
+123.4, 108.6, 98.0, 77.2, 46.4, 29.9.
+
+Caps, for the record (cross = `P(delta_g, delta_src) / P(delta_g, delta_m)`; "/ SE" is
+the mean shift of the cross power over realizations 0-19 divided by the 100-realization
+standard error of `P(delta_g, delta_m)` in the same k_f shell, worst shell of any bin):
+
+| arm | worst requirement | cross - 1, k <= 0.02, worst seed | bin 1 mean cross - 1 at k 0.2 | shift / SE: k <= 0.1; any k |
+|---|---|---|---|---|
+| none | 150.9 | | | |
+| plain nu 5 | 96.8 | 8.3e-3 | -1.7e-3 | 0.88; 7.1 |
+| mass nu 5 R1 | 96.8 | 3.4e-6 | -5.4e-4 | 0.11; 6.0 |
+| mass nu 5 R2 | 96.8 | 9.4e-6 | -1.2e-3 | 0.25; 7.7 |
+| mass nu 4.5 R1 | 74.8 | 9.2e-6 | -2.1e-3 | 0.60; 25 |
+| mass nu 4 R2 | 56.9 | 6.4e-5 | -1.6e-2 | 6.5; 112 |
+
+Every arm at nu = 5 brings every row under 97 Mpc/h, and the mass-conserving cap keeps
+low k as predicted; every arm costs velocity power at high k beyond what the ensemble
+resolves (mass nu 5 R1: under SE/3 below k ~0.15 in every bin, 1-6 SE above k ~0.2 in
+bins 1-6). The buffer was the only reason for the cap, and the line-of-sight guard
+leaves one seed short by 0.9 Mpc/h, so the velocities stay uncapped (JC, 2026-10-06):
+the tail (~1e-4 of a bin's galaxies displaced > 50 Mpc/h) is the defect already weighed
+against Gaussian velocities above. `scripts/m5_cap.py` stays as the instrument; rows in
+the deneb checkout's `runs/m5/cap.jsonl`.
+
+### Buffer 160 Mpc/h (JC, 2026-10-06)
+
+`suite.RADIAL_BUFFER` and both v28 configs: 150 -> 160 Mpc/h. Every v28 box holds it
+(`L/2 - rmax` >= 172.2, bin 2), and all 100 realizations' line-of-sight requirements
+are known to sit under it (<= 150.9, above). The tail is not removed: a realization
+beyond these can need more, up to bin 1's box room of 181.8, and the guard raises if
+it does. Every catalog changes (the buffer is in the config hash, and a wider window
+changes every slab's draws), so all 100 are regenerated into a new directory with the
+unchanged job script; job 2082's 91 catalogs used 150. E1/E2 as above.
+
 ## Known risks / open questions
 
 - The prod_v2 1.28x over-density is consistent with the LogNormalGalaxies 0.9.4 -> 0.10

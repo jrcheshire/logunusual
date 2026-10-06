@@ -17,7 +17,7 @@ mask:                       # omit (or null) for the full sky
 seed_base: 137000000        # seed = seed_base + realization * 1000 + bin index
 nbar_scale: 1.0             # multiplies every bin's nbar (smoke runs)
 grid_scale: 1.0             # multiplies every bin's N_grid (smoke runs)
-radial_buffer: 150.0        # Mpc/h drawn beyond the shell on both sides
+radial_buffer: 160.0        # Mpc/h drawn beyond the shell on both sides
 jitter_p: 1                 # uniform-in-cell placement (the validated construction)
 n_workers: null             # sampler threads, one x-slab per task (null: core count)
 angular_precut: true        # draw only cells whose galaxies can land in the mask
