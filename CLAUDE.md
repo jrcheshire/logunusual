@@ -158,7 +158,5 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
 - **Do not calibrate mock inputs to SPHEREx data** (it puts the contamination into the
   null); the input ladder is linear -> halofit -> literature b(k)/HOD -> external
   survey.
-- Keep SPHEREx-specific survey config (mask, forecast densities) out of any public
-  surface; the v28 numbers in `suite.py` are forecast products, not data.
 - Heavy local runs: price them first (a full seven-bin realization peaks at ~14 GB RSS;
   the field stage's device peak is 12 x N^3 float64).
