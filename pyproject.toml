@@ -1,6 +1,6 @@
 [project]
 name = "logunusual"
-version = "0.0.1"
+version = "0.1.0"
 description = "Fast lognormal galaxy mock generator (JAX + numpy) for SPHEREx per-bin mocks"
 authors = [{ name = "James Cheshire", email = "cheshire@caltech.edu" }]
 requires-python = ">=3.12"
