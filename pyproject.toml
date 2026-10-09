@@ -77,7 +77,7 @@ gpu = { features = [], solve-group = "all" }
 tables = { features = ["tables"], no-default-feature = true }
 
 # The exact conda-forge CAMB build the v28 tables were made with; conda-forge has no
-# 1.5.9 for linux-aarch64, and the tables are made on the laptop.
+# 1.5.9 for linux-aarch64, so the env is osx-arm64 only.
 [tool.pixi.feature.tables]
 platforms = ["osx-arm64"]
 
