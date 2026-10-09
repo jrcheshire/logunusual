@@ -1225,6 +1225,27 @@ it does. Every catalog changes (the buffer is in the config hash, and a wider wi
 changes every slab's draws), so all 100 are regenerated into a new directory with the
 unchanged job script; job 2082's 91 catalogs used 150. E1/E2 as above.
 
+### Ensemble (deneb job 2117, commit `a4b9eec`, 2026-10-07)
+
+100 of 100 realizations written, checked and in the manifest
+(`/work/jamie/logunusual/m5_b160/v28_halofit/`, 1.5 TB, 15.04 GiB each); 2 h 20 min
+on 2 x 16 cores, 101-138 s per realization plus 30-104 s sha256, peak RSS 12.3 GB.
+**E1 passes**: config hash `272d7f00f430` (that of `configs/v28_halofit.yaml`), 700
+distinct seeds, manifest exactly realizations 0-99. The largest line-of-sight
+requirement is r2 bin 1's 150.9 Mpc/h (0.943 of the buffer; next r6 bin 1, 135.2),
+the value measured from the same field in jobs 2082 and 2111. **E2 passes**
+(`scripts/m5_ensemble.py`; realized/target nbar, mean over 100, SE from their scatter):
+
+| bin | galaxies (mean) | realized/target | SE | edge | z | max required/buffer |
+|---|---|---|---|---|---|---|
+| 1 | 40,214,427 | 0.99939 | 0.00070 | 1.0e-4 | -1.02 | 0.943 |
+| 2 | 132,865,592 | 0.99982 | 0.00034 | 1.8e-5 | -0.59 | 0.771 |
+| 3 | 108,458,840 | 1.00002 | 0.00022 | 7.2e-6 | 0.08 | 0.705 |
+| 4 | 123,317,319 | 1.00014 | 0.00017 | 3.9e-6 | 0.82 | 0.653 |
+| 5 | 120,463,443 | 0.99997 | 0.00015 | 2.4e-6 | -0.20 | 0.560 |
+| 6 | 102,408,693 | 1.00004 | 0.00007 | 1.2e-6 | 0.60 | 0.315 |
+| 7 | 23,369,009 | 1.00003 | 0.00007 | 5.1e-7 | 0.37 | 0.205 |
+
 ## Known risks / open questions
 
 - The prod_v2 1.28x over-density is consistent with the LogNormalGalaxies 0.9.4 -> 0.10

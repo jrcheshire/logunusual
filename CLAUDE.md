@@ -427,5 +427,9 @@ them in both directions (G10).
   v28 grids (descoped from finer grids, JC): `make_pk_tables.py` + P1 (byte-identical),
   two tables per bin, pair check, raise on clipping with a galaxy table, G15 passed,
   seven-bin realization 0 ok. Open, not scheduled: velocities on finer cells.
+- **M5 ensemble DONE (2026-10-07)** on branch `jc/m5-ensemble`: 100 realizations of
+  `configs/v28_halofit.yaml` at f_NL = 0 on deneb (job 2117, buffer 160, 1.5 TB in
+  `/work/jamie/logunusual/m5_b160/`); E1 and E2 pass (`ROADMAP.md` M5). Replaces the
+  retired prod_v2.
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.
