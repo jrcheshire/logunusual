@@ -50,14 +50,27 @@ class Shell:
         """Full-sky shell volume `4/3 pi (rmax^3 - rmin^3)`."""
         return 4.0 / 3.0 * np.pi * (self.rmax**3 - self.rmin**3)
 
-    @staticmethod
-    def required_buffer(box: Box, f: float, psi_max: float) -> float:
-        """The buffer the drawn window must have for a given field: a galaxy sits up
-        to half a cell diagonal from its cell's centre and moves by up to
-        `f |Psi_cell|` along the line of sight, so no galaxy from a cell outside
-        `[r_lo, r_hi]` can land in the shell iff `buffer >= sqrt(3)/2 dx + f max|Psi|`
-        over the drawn cells. Checked at field time by `sample_shell`."""
-        return 0.5 * np.sqrt(3.0) * box.dx + abs(float(f)) * float(psi_max)
+    def required_buffer(self, box: Box, f: float, psi_flat=None) -> float:
+        """The smallest buffer that draws every cell able to feed the shell, for this
+        field. A galaxy at `x` in cell `c` lands at `|s| = | |x| + f Psi_c . x_hat |`;
+        `reach_interval` bounds that over the cell, and a cell can feed the shell iff
+        the bound meets `[rmin, rmax]`. Returns the largest distance from the shell of
+        any such cell, over the whole box; `psi_flat` None means no RSD. Checked at
+        field time by `sample_shell`."""
+        n = box.n_mesh
+        need = 0.0
+        for i in range(n):
+            r = slab_radius(box, i).reshape(-1)
+            p = None if psi_flat is None else psi_flat[i * n * n : (i + 1) * n * n]
+            s_lo, s_hi = reach_interval(box, i, f, p)
+            reach = (s_hi >= self.rmin) & (s_lo <= self.rmax)
+            outer = (r > self.rmax) & reach
+            if outer.any():
+                need = max(need, float((r[outer] - self.rmax).max()))
+            inner = (r < self.rmin) & reach
+            if inner.any():
+                need = max(need, float((self.rmin - r[inner]).max()))
+        return need
 
     def check_box(self, box: Box):
         """The buffered shell must fit inside the box centred on the observer, and
@@ -107,6 +120,44 @@ def slab_radius(box: Box, i: int):
     """`|x_centre|` of x-slab `i`, shape (N, N)."""
     c = cell_centres_1d(box)
     return np.sqrt(c[i] ** 2 + c[:, None] ** 2 + c[None, :] ** 2)
+
+
+def reach_interval(box: Box, i: int, f: float, psi_slab=None):
+    """Bounds `(s_lo, s_hi)`, each shape (N*N,), on the redshift-space radius
+    `|s| = | |x| + f Psi_c . x_hat |` of any point `x` of the cells of x-slab `i`
+    (`psi_slab` the slab's `(N*N, 3)` rows of `psi_flat`; None means no RSD). `x` lies
+    within `h = sqrt(3)/2 dx` of the centre `c`, so `|x|` is in `[max(r_c - h, 0),
+    r_c + h]` and `x_hat` within the chord `chi = 2 sin(theta/2)`, `sin theta = h/r_c`,
+    of `c_hat` (`chi = 2` for `r_c <= h`); the line-of-sight shift is then in
+    `f Psi_c . c_hat +- |f| |Psi_c| chi`, clipped to `+- |f| |Psi_c|`."""
+    h = 0.5 * np.sqrt(3.0) * box.dx
+    n = box.n_mesh
+    r = slab_radius(box, i).reshape(-1)
+    if psi_slab is None:
+        lo = hi = 0.0
+    else:
+        c = cell_centres_1d(box)
+        p = psi_slab
+        dot = (
+            p[:, 0] * c[i]
+            + (p[:, 1].reshape(n, n) * c[:, None]).reshape(-1)
+            + (p[:, 2].reshape(n, n) * c[None, :]).reshape(-1)
+        )
+        a = float(f) * dot / r
+        m = abs(float(f)) * np.sqrt(np.einsum("ij,ij->i", p, p))
+        sin_t = np.minimum(h / r, 1.0)
+        chi = np.where(r > h, np.sqrt(2.0 - 2.0 * np.sqrt(1.0 - sin_t**2)), 2.0)
+        lo = np.maximum(a - m * chi, -m)
+        hi = np.minimum(a + m * chi, m)
+    rho_lo = np.maximum(r - h, 0.0) + lo
+    rho_hi = r + h + hi
+    s_hi = np.maximum(np.abs(rho_lo), np.abs(rho_hi))
+    s_lo = np.where(
+        (rho_lo <= 0.0) & (rho_hi >= 0.0),
+        0.0,
+        np.minimum(np.abs(rho_lo), np.abs(rho_hi)),
+    )
+    return s_lo, s_hi
 
 
 def slab_window(box: Box, shell: Shell, mask, i: int, angular: bool = True):
@@ -282,7 +333,7 @@ class ShellStats:
     draw_seed: int = 0
     f: float = 0.0
     psi_max: float = 0.0  # max |Psi| over the drawn (window) cells, Mpc/h
-    required_buffer: float = 0.0  # Shell.required_buffer for this field
+    required_buffer: float = 0.0  # Shell.required_buffer for this field (exact), Mpc/h
 
     def realized_nbar(self, fsky: float) -> float:
         return self.n_kept / (fsky * self.shell.volume)
@@ -375,14 +426,13 @@ def sample_shell(
     )
     psi = fields.psi_flat("xyz") if rsd else None
     stats.psi_max = _max_psi_in_window(psi, box, shell) if rsd else 0.0
-    stats.required_buffer = shell.required_buffer(box, f, stats.psi_max)
+    stats.required_buffer = shell.required_buffer(box, f, psi)
     if shell.buffer < stats.required_buffer:
         raise ValueError(
             f"radial buffer {shell.buffer:g} Mpc/h is below the "
-            f"{stats.required_buffer:.1f} this field needs (sqrt(3)/2 dx = "
-            f"{0.5 * np.sqrt(3.0) * box.dx:.1f} + f max|Psi| = "
-            f"{abs(f) * stats.psi_max:.1f}); galaxies outside the window could "
-            f"reach the shell [{shell.rmin:g}, {shell.rmax:g}]"
+            f"{stats.required_buffer:.1f} this field needs: a cell that far from the "
+            f"shell [{shell.rmin:g}, {shell.rmax:g}] can displace galaxies into it "
+            f"(max f|Psi| in the window {abs(f) * stats.psi_max:.1f})"
         )
     half = 0.5 * box.box_size
     jitter_p = fields.jitter_p

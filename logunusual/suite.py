@@ -14,13 +14,10 @@ Provenance of the numbers (all copied verbatim from `generate_config.py`,
 - `nbar`: sum over the five sigma_z/(1+z) < 0.2 bins of the v28 forecast density
   (`galaxy_density_v28_base_cbe.txt`); `b`: numdens-weighted mean v28 bias.
 - `L_box`: fits `2 * (rmax + RADIAL_BUFFER)`; `N_grid`: keeps the cell 8-16 Mpc/h.
-- `f`: the growth rate written into the prod_v2 configs. It was computed as
-  `astropy.cosmology.Planck18.Om(z_eff) ** 0.55`, and astropy's Planck18 has
-  Om0 = 0.30966 with a 0.06 eV neutrino, NOT the Om0 = 0.3153 of the distance
-  cosmology (the chimera comment claiming they agree is wrong). The values are
-  stored as literals so the drop-in contract is exact; the two cosmologies
-  differ in f by 0.4-0.9% across the bins, which is a documented inconsistency
-  of prod_v2, not something this package silently corrects.
+- `f`: the exact linear growth rate `dln D / dln a` of the distance cosmology's
+  flat-LCDM background, `fnl.growth_rate_md(z_eff, OMEGA_M_DISTANCE)` (2026-10-01,
+  ROADMAP M5), stored as literals so this module needs no numerics; a test
+  recomputes them.
 """
 
 from dataclasses import dataclass
@@ -29,8 +26,10 @@ from dataclasses import dataclass
 SEED_BASE = 137_000_000
 SEED_REALIZATION_STRIDE = 1000
 
-#: Buffer (Mpc/h) added on both sides of each shell when the box is drawn.
-RADIAL_BUFFER = 150.0
+#: Buffer (Mpc/h) added on both sides of each shell when the box is drawn. The boxes
+#: were sized for 150; 160 (M5) covers the displacement tail of the 100-realization
+#: ensemble and leaves >= 12 Mpc/h of box room in every bin.
+RADIAL_BUFFER = 160.0
 
 #: Distance cosmology behind rmin/rmax and the matter-power tables.
 H0_DISTANCE = 67.36
@@ -64,7 +63,7 @@ class Bin:
     N_grid: int
     nbar: float  # (Mpc/h)^-3, v28 nominal
     b: float
-    f: float  # growth rate as used by prod_v2 (see module docstring)
+    f: float  # linear growth rate at z_eff (see module docstring)
     pk_file: str = ""  # input P(k) TSV name (relative to the run's pk_dir)
     # nonlinear galaxy-target table (same dir); empty = `pk_file`, which stays the
     # linear table behind the matter field, the velocities and M(k)
@@ -100,16 +99,15 @@ class Bin:
         return f"data/{self.pk_file}"
 
 
-# Growth rates as written into the prod_v2 configs (astropy Planck18 Om(z)**0.55; see
-# the module docstring for why these are literals and not recomputed).
-_F_PROD_V2 = {
-    0.10: 0.581925899217631,
-    0.30: 0.6797684347521443,
-    0.50: 0.7557107920438596,
-    0.70: 0.8127713696136714,
-    0.90: 0.8550542749312783,
-    1.30: 0.9096055989924714,
-    1.90: 0.950584507968171,
+# `fnl.growth_rate_md(z_eff, OMEGA_M_DISTANCE)`, pinned by tests/test_suite.py.
+_F_FLAT_LCDM = {
+    0.10: 0.585721401221273,
+    0.30: 0.6849019867378581,
+    0.50: 0.7612297870023778,
+    0.70: 0.8181973393109712,
+    0.90: 0.8602004951231208,
+    1.30: 0.9141354303816462,
+    1.90: 0.9544897124652842,
 }
 
 # fmt: off
@@ -125,7 +123,7 @@ _ROWS = (
 )
 # fmt: on
 
-BIN_SUITE_V28 = tuple(Bin(*row, f=_F_PROD_V2[row[4]]) for row in _ROWS)
+BIN_SUITE_V28 = tuple(Bin(*row, f=_F_FLAT_LCDM[row[4]]) for row in _ROWS)
 
 
 def seed_for(realization: int, bin_index: int, base: int = SEED_BASE) -> int:
@@ -143,9 +141,3 @@ def seed_for(realization: int, bin_index: int, base: int = SEED_BASE) -> int:
             f"bin_index must be in (0, {SEED_REALIZATION_STRIDE}), got {bin_index}"
         )
     return base + realization * SEED_REALIZATION_STRIDE + bin_index
-
-
-def omega_m_flat_lcdm(z: float, omega_m0: float) -> float:
-    """Omega_m(z) for a flat LCDM background without radiation or neutrinos."""
-    a3 = (1.0 + z) ** 3
-    return omega_m0 * a3 / (omega_m0 * a3 + 1.0 - omega_m0)

@@ -42,9 +42,9 @@ in HDF5 (root attributes `PIXTYPE=HEALPIX`, `ORDERING=NESTED|RING`). `nbar_scale
 (default: the core count; the output is the same for any value); `angular_precut`
 (default true) draws only cells whose galaxies can land in the mask. Seeds follow
 `seed_base + realization * 1000 + bin index`, so realizations are reproducible bin by
-bin. `radial_buffer` must cover half a cell diagonal plus `f` times the largest cell
-displacement of the realized field; the run raises if it does not, and records the
-bound per bin in `summary.json`.
+bin. `radial_buffer` (default 160 Mpc/h) must reach every cell of the box whose
+galaxies' line-of-sight shift can carry them into the shell; the run raises if it does
+not, and records that requirement per bin in `summary.json`.
 
 `f_nl` (default 0) adds the local-f_NL scale-dependent bias to the galaxy field,
 `b(k) = b + 2 (b - fnl_p) f_NL delta_c / M(k)`, in the LSS convention (growth

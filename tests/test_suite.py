@@ -2,9 +2,10 @@
 
 import math
 
+import numpy as np
 import pytest
 
-from logunusual import suite
+from logunusual import fnl, suite
 from logunusual.suite import BIN_SUITE_V28, RADIAL_BUFFER, seed_for
 
 
@@ -34,19 +35,36 @@ def test_cell_size_in_design_band():
         assert math.isclose(b.k_nyquist, math.pi / b.cell)
 
 
-def test_growth_rate_is_astropy_planck18_not_distance_cosmology():
-    # f was generated with astropy Planck18 (Om0 = 0.30966 + 0.06 eV neutrino). A
-    # bare flat-LCDM Om(z)^0.55 at that Om0 reproduces it to < 0.3%, while the
-    # distance cosmology's Om0 = 0.3153 misses by ~0.5%. Pins the documented
-    # inconsistency so nobody "fixes" the literals to the other cosmology by
-    # accident.
+def test_growth_rate_literals_are_the_distance_cosmology_growth_rate():
     for b in BIN_SUITE_V28:
-        f_astropy_like = suite.omega_m_flat_lcdm(b.z_eff, 0.30966) ** 0.55
-        f_distance = suite.omega_m_flat_lcdm(b.z_eff, suite.OMEGA_M_DISTANCE) ** 0.55
-        assert abs(b.f - f_astropy_like) < 3e-3, b.name
-        assert abs(b.f - f_distance) > 3e-3, b.name
+        f = fnl.growth_rate_md(b.z_eff, suite.OMEGA_M_DISTANCE)
+        assert b.f == pytest.approx(f, rel=4 * np.finfo(float).eps), b.name
     fs = [b.f for b in BIN_SUITE_V28]
     assert fs == sorted(fs) and all(0 < f < 1 for f in fs)
+
+
+@pytest.mark.parametrize("z", [0.0, 0.1, 0.9, 1.9, 5.0])
+def test_growth_rate_is_dlnD_dlna_of_growth_md(z):
+    # Centred differences of ln D in u = ln a, Richardson-extrapolated over h and h/2:
+    # R's error is O(h^4), so against the true derivative it is ~1/15 of the step
+    # |R(h) - R(h/2)| (measured 0.067 at every z here). The quadrature's 1e-12
+    # relative error enters as ~1e-10, below every step. A growth rate off by more
+    # than one step is not the derivative of growth_md.
+    om = suite.OMEGA_M_DISTANCE
+
+    def lnD(u):
+        return np.log(fnl.growth_md(np.exp(-u) - 1.0, om))
+
+    u = -np.log1p(z)
+
+    def fd(h):
+        return (lnD(u + h) - lnD(u - h)) / (2 * h)
+
+    def richardson(h):
+        return (4 * fd(h / 2) - fd(h)) / 3
+
+    r1, r2 = richardson(0.04), richardson(0.02)
+    assert abs(fnl.growth_rate_md(z, om) - r2) <= abs(r1 - r2)
 
 
 def test_seed_schedule_matches_prod_v2_and_is_collision_free():

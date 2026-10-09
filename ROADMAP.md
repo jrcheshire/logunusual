@@ -911,8 +911,340 @@ per axis to the production Nyquist, which removes no mode on the production grid
 
 ## M5 -- Ensemble production
 
-Replace or supplement prod_v2 (100 realizations). Realization count, machine, and whether
-prod_v2 is retired are JC's call; not scheduled here.
+Replaces prod_v2, which is retired (JC, 2026-10-01). Scope (JC): 100 realizations to
+start, f_NL = 0, the halofit galaxy target of `configs/v28_halofit.yaml` (bins 1-6;
+bin 7 keeps the linear target, M4), on deneb.
+
+### Construction (planned 2026-10-01)
+
+**Growth rate.** Drop-in fidelity to prod_v2 no longer constrains `Bin.f`. It is now
+the exact linear growth rate `f = dln D / dln a` of the flat-LCDM background the
+package already uses for distances (`OMEGA_M_DISTANCE` = 0.3153) and for f_NL's
+`g0` (`fnl.growth_md`): `f = -3/2 Om(a) + 1 / (a^2 E(a)^3 I(a))`, with
+`I(a) = int_0^a da' / (a' E(a'))^3` the Heath integral. `fnl.growth_rate_md`
+computes it; `suite.py` stores the literals (dependency-free) and a test recomputes
+them. The CAMB tables' cosmology (Planck 2018, `make_pk_tables.PLANCK18`) has
+Om0 = 0.3152 (cdm + baryon + nu), the same background. Measured against
+alternatives at the v28 z_eff (2026-10-01):
+
+| z | prod_v2 (astropy Planck18 Om^0.55) | Om(z)^0.55, Om0 0.3153 | exact, Om0 0.3153 | CAMB f sigma8 / sigma8 |
+|---|---|---|---|---|
+| 0.1 | 0.58193 | 0.58733 | 0.58572 | 0.58654 |
+| 0.3 | 0.67977 | 0.68520 | 0.68490 | 0.68587 |
+| 0.5 | 0.75571 | 0.76092 | 0.76123 | 0.76231 |
+| 0.7 | 0.81277 | 0.81765 | 0.81820 | 0.81936 |
+| 0.9 | 0.85505 | 0.85961 | 0.86020 | 0.86141 |
+| 1.3 | 0.90961 | 0.91364 | 0.91414 | 0.91538 |
+| 1.9 | 0.95058 | 0.95417 | 0.95449 | 0.95572 |
+
+prod_v2 sits 0.5-0.9% below CAMB. The exact flat-LCDM rate sits 0.13-0.14% below it
+at every z, a constant offset from what the flat-LCDM integral leaves out (radiation;
+neutrinos counted as clustering matter). Every catalog and the v28 config hash change.
+
+**Layout on deneb.** One Slurm job, `--cpus-per-task=64 --exclusive` (only deneb has
+64 CPUs), no GPU (the 3050 holds 3 of 7 bins). Two streams, `taskset -c 0-15` and
+`-c 16-31` (the 32 physical cores; SMT siblings idle), each running realizations as
+one process apiece: `logunusual run` -> `logunusual check` -> sha256 into a manifest.
+`sample.default_workers` and the XLA-CPU pool both follow the affinity mask. Existing
+catalogs are skipped (atomic rename: a file with the final name is complete), a failed
+realization is logged and the loop moves on, and three failures in a row stop the
+stream, so the same job resubmitted fills gaps. Output on `/work` (~1.6 TB at
+15.04 GiB per realization). Bitwise reproduction of a catalog needs the same 16-core
+affinity: XLA-CPU's reduction order follows the thread pool.
+
+### Checks and gates
+
+| check | statistic | where |
+|---|---|---|
+| f | `suite` literals equal `fnl.growth_rate_md(z, OMEGA_M_DISTANCE)` to round-off; `growth_rate_md` matches a centred finite difference of `ln growth_md` in `ln a` within the difference's own truncation bound | fast, `tests/test_suite.py` |
+| pre-push | full suite (the slow RSD gates G6/G10 re-run with the new f), format, lint, `m1_reproducibility --n 64` IDENTICAL | laptop |
+| pilot | realizations 0 and 50 together: `check` ok, realized/target inside realization 0's previous range (0.9987-1.0078; same seeds, f moved < 1%), peak RSS < 20 GB per process; per-realization wall and write MB/s recorded, which price the full run | deneb |
+| E1 | 100/100 catalogs pass `check`; one config hash; 700 distinct seeds; 100 manifest entries | `scripts/m5_ensemble.py` |
+| E2 | per bin, the ensemble mean of realized/target nbar is 1 within 3 SE (SE from the scatter over realizations): the lognormal is normalised to its box mean and stationary, so the real-space density's expectation is exactly the target at every point (by symmetry on the periodic box); the radial RSD shift across a curved shell adds `3 sigma_s^2 (rmax - rmin) / (rmax^3 - rmin^3)` (sigma_s the rms radial `f Psi`), <= 1e-4 in every bin and reported; a wrong fsky, a mask-edge bias or a buffer leak shows here | `scripts/m5_ensemble.py` |
+
+### Pilot and the displacement tail (2026-10-01, deneb jobs 2077 / 2078, commits `48963a8` / `a2a3b8b`)
+
+Pilot (realizations 0 and 50 together, 2x16 cores): realization 0 passes (79 s,
+peak RSS 11.9 GB, sha256 7 s, layout ok, realized/target 0.9987-1.0078, 15.04 GiB;
+the array took 145-190 MB/s from one writer). **Realization 50 fails the buffer guard
+in bin 1**: f max|Psi| = 183.5 Mpc/h, so the shell needs 190.3 against the 150
+buffer, and bin 1's box allows at most 181.8 (`L/2 - rmax`; bin 2: 172.2).
+
+Mechanism (`scripts/m5_psi_tail.py`, bin 1, the production field bitwise; f|Psi| in
+Mpc/h, maxima over the radial window):
+
+| | r0 | r50 |
+|---|---|---|
+| densest matter cell: delta_m (Gaussian field there) | 203 (5.17 sigma) | 289 (5.47 sigma) |
+| max f|Psi|; its cell's offset from the densest cell | 106.7; far (34, 73, 34) | 183.5; adjacent (0, 1, 0) |
+| point-mass f|Psi| from the densest cell alone at the max cell | 0.0 | 105.1 |
+| max f|Psi| with delta_m -> 0 in the top 1 / 8 / 64 cells | 106.7 / 86.7 / 60.7 | 93.3 / 88.1 / 62.5 |
+| |Psi| per-component rms; p99.999 | 5.65; 120.9 | 5.68; 131.5 |
+| window cells (expected galaxies) with f|Psi| > 50 / 100 / 150 | 147 (9,335) / 5 (158) / 0 | 180 (11,756) / 6 (233) / 6 (233) |
+| Psi from a Gaussian field, same white noise and target `P / sinc^2`: max f|Psi|; rms; cellwise corr | 19.4; 5.64; 0.87 | 18.7; 5.66; 0.87 |
+| lognormal matter target without `/ sinc^2`: max f|Psi|; delta_m max; rms | 64.9; 98; 5.32 | 64.4; 91; 5.33 |
+
+Linear continuity applied to the lognormal matter field turns each of its few densest
+cells (delta_m ~ 200-300 at 5-5.5 sigma of the Gaussian field) into a point source of
+displacement: f|Psi| ~ 100-180 Mpc/h in the neighbouring cells, 20-30x the rms. In
+r50 a single cell sets the guard's requirement (removing it: 183.5 -> 93.3). The tail
+reaches ~1e-4 of a bin's galaxies above 50 Mpc/h and ~2e-6 above 100. A Gaussian
+field with the same target has the same displacement rms (two-point identical by
+construction) and a maximum of ~19. The jitter deconvolution of the matter target
+doubles the densest cells and the tail. The guard takes the GLOBAL max over the
+window, so the most extreme of ~2.4M cells sets every realization's requirement.
+
+### Displacements from the Gaussian linear field: built, measured, rejected (2026-10-01)
+
+Considered (JC chose it, then reverted on the measurement below): `Psi_k = i k / k^2
+delta_lin,k`, `delta_lin,k = rfftn(w) sqrt(P_m / V_cell)`, the Gaussian field on the
+galaxy field's white noise with the matter target `P_m = P / sinc^2`. Same velocity auto
+power, Gaussian tail (max f|Psi| ~19 Mpc/h in bin 1). Built and green (131 tests,
+`delta_g` and real-space catalogs bitwise unchanged), not merged.
+
+**Why not.** For a lognormal, `Cov(delta_g, L) = Cov(G_g, L)` for any Gaussian `L`
+jointly Gaussian with `G_g` (Gaussian integration by parts, up to O(P / V_box) from the
+box-mean normalisation). So `P(delta_g, delta_lin) = sqrt(P_G,g P_m)` exactly (measured:
+128^3, 64 seeds on 32-seed bands, SE <= 0.50%, max |z| 2.35 / 55 bands, linear and halofit
+targets; the lognormal-matter source fails it at |z| 223), and by Cauchy-Schwarz NO
+Gaussian velocity source with the right velocity power correlates with the galaxies
+better than that. The lognormal's Gaussian core `P_G,g` falls below `b^2 P` at low k (the
+mode-coupled power of `log(1 + xi)` has no Gaussian counterpart), so the galaxy-velocity
+cross falls below linear theory exactly where P is small. Exact ensemble values of
+`P(g, velocity source) / (b P_m)` on the production grids (halofit config):
+
+| bin | Gaussian source: k_f / 0.005 / 0.01 / 0.05 / 0.1 | lognormal-matter source (kept) |
+|---|---|---|
+| 1 | 0.938 / 0.917 / 0.938 / 0.891 / 0.801 | 0.983 / 0.979 / 0.983 / 0.966 / 0.954 |
+| 2 | 0.910 / 0.910 / 0.934 / 0.882 / 0.783 | 0.984 / 0.984 / 0.987 / 0.974 / 0.967 |
+| 3 | 0.895 / 0.917 / 0.941 / 0.892 / 0.801 | 0.981 / 0.985 / 0.988 / 0.976 / 0.967 |
+| 4 | 0.874 / 0.920 / 0.940 / 0.897 / 0.809 | 0.979 / 0.986 / 0.989 / 0.979 / 0.971 |
+| 5 | 0.864 / 0.916 / 0.942 / 0.900 / 0.814 | 0.972 / 0.983 / 0.988 / 0.977 / 0.966 |
+| 6 | 0.776 / 0.905 / 0.932 / 0.885 / 0.790 | 0.936 / 0.974 / 0.981 / 0.968 / 0.947 |
+| 7 | 0.684 / 0.876 / 0.921 / 0.867 / 0.753 | 0.860 / 0.949 / 0.968 / 0.945 / 0.896 |
+
+(Gaussian: `sqrt(P_G,g P_m)`; lognormal: `rfftn(expm1(xi_{Gg,Gm}))`, xi_{Gg,Gm} from
+`sqrt(P_G,g P_G,m)`; both shell averages over `b P_m`.) At bin 5, k = 0.01, the Gaussian
+source puts the redshift-space monopole ~1.4% and the quadrupole ~5% below Kaiser
+(~0.3% / ~1% with the lognormal source), scale-dependent and at the f_NL scales. The
+1e-4 of galaxies the lognormal tail displaces > 50 Mpc/h is the cheaper defect. The
+built change is kept outside the repo as a patch.
+
+### Exact buffer guard (JC, 2026-10-01)
+
+The velocities stay continuity on the lognormal matter field. What changes is the
+guard. Under radial RSD a galaxy at `x` lands at radius `|x| + f Psi_c . x_hat`, with
+`|x|` within `r_c +- h` (`h = sqrt(3)/2 dx`) of its cell centre; so an UNDRAWN cell can
+feed the shell only if `r_c - h - f|Psi_c| <= rmax` (`r_c > rmax`) or `r_c + h + f|Psi_c|
+>= rmin` (`r_c < rmin`; a shift through the observer trips the same test). The field's
+requirement is the largest distance from the shell of any cell that can reach it:
+`required_buffer = max(r_c - rmax over reaching outer cells, rmin - r_c over reaching
+inner cells)`, over every cell of the box, and the guard is `buffer >= required_buffer`.
+It is exact under the cell bound (`|Psi_c|` for its radial component, `h` for the
+offset), so a peak deep inside the shell no longer counts: r50's 183.5 Mpc/h cell sits
+at r = 517 in bin 1's [0, 568] shell. The old guard (`h + f max|Psi|` over the window)
+ignored undrawn cells' displacements; this one reads them. `psi_max` (max |Psi| over the
+window) stays in the metadata as a diagnostic; `required_buffer` keeps its name and
+meaning, now exact.
+
+| check | statistic | where |
+|---|---|---|
+| exact | `required_buffer` equals an independent full-grid computation of the same condition | fast, `tests/test_shell.py` |
+| complete | with `buffer = required_buffer`, no point of any undrawn cell (corners and interior samples, shifted by its cell's Psi) lands in the shell; with a planted large Psi the guard raises iff `buffer < required_buffer` | fast, `tests/test_shell.py` |
+| scope | a large Psi in a drawn cell inside the shell does not raise; the same Psi in an undrawn cell next to the window does | fast, `tests/test_shell.py` |
+| re-pilot | realizations 0 and 50 on deneb pass; required_buffer per bin recorded | deneb |
+
+Re-pilot (deneb job 2081, commit `bc60355`, realizations 0 and 50 together on 2x16
+cores): both pass `check`; realization 0 is the pilot's catalog to the galaxy
+(651,451,068), as a guard change must leave it. Exact `required_buffer` per bin
+(Mpc/h; the window-max `f max|Psi|` the old guard used in brackets):
+
+| r | b1 | b2 | b3 | b4 | b5 | b6 | b7 |
+|---|---|---|---|---|---|---|---|
+| 0 | 69.6 (107) | 68.6 (106) | 69.5 (106) | 60.8 (98) | 53.5 (84) | 48.2 (51) | 31.7 (26) |
+| 50 | 53.0 (184) | 59.8 (92) | 82.3 (241) | 87.4 (101) | 97.8 (94) | 45.9 (55) | 29.6 (27) |
+
+The worst of the 14 leaves 52 Mpc/h of the 150 buffer; the exact requirement still has
+a tail (a peak just outside the window), so a seed can in principle fail. Cost with two
+streams: 96-99 s per realization (79 s alone), peak RSS 11.5-11.9 GB, `/work` writes
+300-316 MB/s while both stream (the array's ~325), and sha256 read-back 45 s per
+catalog (not from page cache).
+
+### Full run (deneb job 2082, commit `bc60355`, 2026-10-01)
+
+91 of 100 realizations written, checked and in the manifest (1.4 TB); 84-85 s per
+realization late in the run. **9 failed the guard against the 150 Mpc/h buffer**
+(`required_buffer`, Mpc/h; box room `L/2 - rmax` in brackets):
+
+| bin (room) | realizations |
+|---|---|
+| 1 (181.8) | r2 150.9, r11 152.2, r21 168.6, r24 284.9, r48 276.7 |
+| 2 (172.2) | r55 155.1, r49 178.0, r82 205.8 |
+| 3 (219.3) | r29 151.3 |
+
+r24, r48, r49 and r82 exceed their box room, so no buffer on the v28 boxes covers the
+ensemble. The cause is the displacement tail above (continuity on the lognormal
+matter field's densest cells), not the guard.
+
+### Line-of-sight guard (JC, 2026-10-03)
+
+The exact guard bounds a galaxy's radial shift by `f|Psi_c|`; the shift is the signed
+line-of-sight component `f Psi_c . x_hat`. For `x` in cell `c` (`|x - c| <= h`):
+`|x|` lies in `[max(r_c - h, 0), r_c + h]`, and `x_hat` within the chord
+`chi = 2 sin(theta/2)`, `sin theta = h / r_c`, of `c_hat` (`chi = 2` when `r_c <= h`),
+so `f Psi_c . x_hat` lies in `[a - m chi, a + m chi]` clipped to `[-m, m]`, with
+`a = f Psi_c . c_hat`, `m = |f| |Psi_c|`. Hence `rho = |x| + f Psi_c . x_hat` lies in an
+interval `[rho_lo, rho_hi]` and `|s| = |rho|` in `[0 or min(|rho_lo|, |rho_hi|),
+max(|rho_lo|, |rho_hi|)]`; a cell can feed the shell iff that range meets
+`[rmin, rmax]`. `required_buffer` keeps its definition over the reaching cells. Every
+cell this admits the old test admitted, so the requirement never rises; without RSD it
+is unchanged. A cell beyond `rmax` displaced outward, or tangentially by less than its
+gap over `chi`, no longer counts. Catalogs and the config hash are unchanged (the
+guard only raises); `required_buffer` in new metadata is the line-of-sight value.
+
+| check | statistic | where |
+|---|---|---|
+| exact | equals an independent full-grid computation of the same interval test | fast, `tests/test_shell.py` |
+| complete | random-direction displacements planted in undrawn cells on both sides, buffer = requirement: no corner or interior point of any undrawn cell lands in the shell; a tangential plant sized so only the chord term admits it is counted, and dropping the chord term fails this test | fast, `tests/test_shell.py` |
+| no rise | never above the `f|Psi_c|` requirement (fixture field and planted fields) | fast, `tests/test_shell.py` |
+| scope | an outward displacement beyond the window does not raise; the same displacement inward does | fast, `tests/test_shell.py` |
+
+### Capping the velocity source: measurement (planned 2026-10-03)
+
+Linear continuity is valid where `delta_m << 1`; on the lognormal's densest cells it
+manufactures displacements of 150-300 Mpc/h (a peak acts as a point mass,
+`Psi ~ delta dx^3 / (4 pi d^2)`). Candidate: compute Psi from a capped copy of the
+matter field, leaving `delta_g`, `delta_m` and the real-space catalog bitwise
+unchanged. Two arms, per bin `delta_max(nu) = exp(nu sigma_G - sigma_G^2 / 2) - 1`
+(`sigma_G^2 = log1p(sigma2)` of the bin's matter target, so one `nu` is one
+significance of each bin's Gaussian field):
+- **plain**: `min(delta_m, delta_max)`. Removes mass m from each peak, which shifts
+  every mode by `-(m/V) e^{-ik.x0}`; the cross term with the field is ~`2m/sqrt(PV)`
+  per mode (percent level at `k_f` for an r50-like peak), biased low on average
+  because peaks sit in large-scale overdensities.
+- **mass-conserving**: the excess above `delta_max` is spread over a lattice sphere of
+  radius R cells (normalised top-hat, FFT convolution, periodic). The total is
+  conserved exactly, the change in `delta_k` is `e_k (W_R(k) - 1)`, O(k^2 R^2) at low
+  k, and outside R the displacement of a spherically spread excess is unchanged (Gauss;
+  approximate on the lattice).
+
+Sweep `nu` in {5.0, 4.5, 4.0} for both arms, R in {1, 2} cells for mass-conserving,
+plus the uncapped baseline (JC, 2026-10-03, revised from {4.5, 4.0, 3.5} x {2, 3} after
+the laptop rehearsal below). The excess is spread by scatter-add over the sphere's
+cells (identical to an FFT top-hat convolution to 4e-16 in the ratios; mass residual
+~1e-16). Reported per (realization, bin, arm), `scripts/m5_cap.py`:
+
+| statistic | role |
+|---|---|
+| `required_buffer` (line-of-sight guard) and the `f|Psi_c|` bound | does the arm fit the buffer / box room |
+| cells capped, mass moved (fraction of the box total), max of the source field after the cap, expected galaxies in the radial window whose `f|Psi|` moves by > 1 Mpc/h | how much the arm touches |
+| per k_f shell, `P(delta_g, delta_src) / P(delta_g, delta_m)` | **the criterion** (JC): Psi is curl-free from `delta_src`, so its divergence is `-delta_src` and the galaxy-velocity cross power is this ratio times the uncapped one; matched fields, so no sampling noise |
+| per k_f shell, `P(delta_src) / P(delta_m)` | the velocity auto (mu^4) term, reported only |
+
+Seeds: the ratio statistics on realizations 0-19 (unselected), all seven bins; the
+requirement additionally on the nine failures of job 2082 (bins 1-3), which are
+selected for extreme peaks and do not enter any ensemble mean. Self-checks on every
+field: `nu = inf` reproduces production Psi bitwise; the mass-conserving source keeps
+the field's sum to round-off; the line-of-sight requirement never exceeds the
+magnitude bound. The pass bar on the ratio is derived from these numbers and agreed
+before any production change.
+
+Predictions: plain arm, ratio scatter of order a percent at k_f per realization with
+a mean below 1; mass-conserving arm, ratio within ~1e-4 of 1 below k ~ 0.02; R = 3 at
+nu ~ 4 brings every seed under 150 Mpc/h (least certain: the requirement near a peak
+should fall as (dx/R)^2).
+
+**Laptop rehearsal (2026-10-03, bin 1, realizations 2 and 0, original sweep).** r2's
+uncapped `f|Psi_c|` requirement is 150.9, job 2082's logged value (the instrument is
+the production field); the line-of-sight guard also gives 150.9 (r2's offending
+displacement is radial). Cross ratio minus 1 / requirement (Mpc/h):
+
+| arm (r2) | delta_max | cells capped | k_f | k 0.1 | k 0.2 | k 0.3 | requirement |
+|---|---|---|---|---|---|---|---|
+| none | | | | | | | 150.9 |
+| plain nu 4.5 | 92.6 | 18 | -4.5e-3 | -3.1e-3 | -6.6e-3 | -9.0e-3 | 47.7 |
+| mass nu 4.5 R2 | 92.6 | 18 | -3.4e-6 | -7.0e-4 | -4.5e-3 | -9.2e-3 | 47.7 |
+| mass nu 4.0 R2 | 51.5 | 236 | -8.2e-6 | -2.6e-3 | -1.5e-2 | -3.2e-2 | 33.3 |
+| mass nu 3.5 R3 | 28.4 | 1697 | -2.8e-5 | -1.7e-2 | -6.5e-2 | -8.9e-2 | 27.9 |
+
+r0 (uncapped 63.7) caps to 56.9 at nu 4.5 and 4.0 alike: past the peaks, ordinary
+structure sets the requirement. The mass-conserving arm keeps low k to ~1e-5 as
+predicted; every cap costs velocity power at high k, more for lower nu and larger R
+(R = 3 is worse than R = 2 at every k for the same requirement), hence the revised
+sweep. Memory ~290 B/cell at the sweep's peak (192^3, 256^3), ~38 GB at 512^3: one
+process at a time on deneb.
+
+**Result (deneb job 2111, commit `ce0d153`, 2026-10-05): not adopted.** 161 rows (the
+nine 2082 failures in bins 1-3; realizations 0-19 in all seven bins), 2.1 h, peak RSS
+18.7 GB. Every field passed the self-checks (`nu = inf` bitwise, mass residual
+<= 1e-15, line of sight <= bound), and the uncapped `f|Psi_c|` requirement reproduces
+2082's logged values for all nine to 0.05 Mpc/h.
+
+**The line-of-sight guard alone clears 8 of the 9** (uncapped requirement, Mpc/h):
+
+| bin | realization: 2082's `f|Psi_c|` guard -> line of sight |
+|---|---|
+| 1 | r2 150.9 -> 150.9, r11 152.2 -> 80.0, r21 168.6 -> 52.6, r24 284.9 -> 74.8, r48 276.7 -> 43.8 |
+| 2 | r55 155.1 -> 44.2, r49 178.0 -> 62.0, r82 205.8 -> 70.8 |
+| 3 | r29 151.3 -> 75.0 |
+
+The 91 realizations that passed 2082 pass the line-of-sight guard too (it never
+exceeds the old one), so uncapped, 1 of the 100 needs more than 150: r2 in bin 1, by
+0.9 Mpc/h. Worst uncapped line-of-sight requirement over all rows, bins 1-7: 150.9,
+123.4, 108.6, 98.0, 77.2, 46.4, 29.9.
+
+Caps, for the record (cross = `P(delta_g, delta_src) / P(delta_g, delta_m)`; "/ SE" is
+the mean shift of the cross power over realizations 0-19 divided by the 100-realization
+standard error of `P(delta_g, delta_m)` in the same k_f shell, worst shell of any bin):
+
+| arm | worst requirement | cross - 1, k <= 0.02, worst seed | bin 1 mean cross - 1 at k 0.2 | shift / SE: k <= 0.1; any k |
+|---|---|---|---|---|
+| none | 150.9 | | | |
+| plain nu 5 | 96.8 | 8.3e-3 | -1.7e-3 | 0.88; 7.1 |
+| mass nu 5 R1 | 96.8 | 3.4e-6 | -5.4e-4 | 0.11; 6.0 |
+| mass nu 5 R2 | 96.8 | 9.4e-6 | -1.2e-3 | 0.25; 7.7 |
+| mass nu 4.5 R1 | 74.8 | 9.2e-6 | -2.1e-3 | 0.60; 25 |
+| mass nu 4 R2 | 56.9 | 6.4e-5 | -1.6e-2 | 6.5; 112 |
+
+Every arm at nu = 5 brings every row under 97 Mpc/h, and the mass-conserving cap keeps
+low k as predicted; every arm costs velocity power at high k beyond what the ensemble
+resolves (mass nu 5 R1: under SE/3 below k ~0.15 in every bin, 1-6 SE above k ~0.2 in
+bins 1-6). The buffer was the only reason for the cap, and the line-of-sight guard
+leaves one seed short by 0.9 Mpc/h, so the velocities stay uncapped (JC, 2026-10-06):
+the tail (~1e-4 of a bin's galaxies displaced > 50 Mpc/h) is the defect already weighed
+against Gaussian velocities above. `scripts/m5_cap.py` stays as the instrument; rows in
+the deneb checkout's `runs/m5/cap.jsonl`.
+
+### Buffer 160 Mpc/h (JC, 2026-10-06)
+
+`suite.RADIAL_BUFFER` and both v28 configs: 150 -> 160 Mpc/h. Every v28 box holds it
+(`L/2 - rmax` >= 172.2, bin 2), and all 100 realizations' line-of-sight requirements
+are known to sit under it (<= 150.9, above). The tail is not removed: a realization
+beyond these can need more, up to bin 1's box room of 181.8, and the guard raises if
+it does. Every catalog changes (the buffer is in the config hash, and a wider window
+changes every slab's draws), so all 100 are regenerated into a new directory with the
+unchanged job script; job 2082's 91 catalogs used 150. E1/E2 as above.
+
+### Ensemble (deneb job 2117, commit `a4b9eec`, 2026-10-07)
+
+100 of 100 realizations written, checked and in the manifest
+(`/work/jamie/logunusual/m5_b160/v28_halofit/`, 1.5 TB, 15.04 GiB each); 2 h 20 min
+on 2 x 16 cores, 101-138 s per realization plus 30-104 s sha256, peak RSS 12.3 GB.
+**E1 passes**: config hash `272d7f00f430` (that of `configs/v28_halofit.yaml`), 700
+distinct seeds, manifest exactly realizations 0-99. The largest line-of-sight
+requirement is r2 bin 1's 150.9 Mpc/h (0.943 of the buffer; next r6 bin 1, 135.2),
+the value measured from the same field in jobs 2082 and 2111. **E2 passes**
+(`scripts/m5_ensemble.py`; realized/target nbar, mean over 100, SE from their scatter):
+
+| bin | galaxies (mean) | realized/target | SE | edge | z | max required/buffer |
+|---|---|---|---|---|---|---|
+| 1 | 40,214,427 | 0.99939 | 0.00070 | 1.0e-4 | -1.02 | 0.943 |
+| 2 | 132,865,592 | 0.99982 | 0.00034 | 1.8e-5 | -0.59 | 0.771 |
+| 3 | 108,458,840 | 1.00002 | 0.00022 | 7.2e-6 | 0.08 | 0.705 |
+| 4 | 123,317,319 | 1.00014 | 0.00017 | 3.9e-6 | 0.82 | 0.653 |
+| 5 | 120,463,443 | 0.99997 | 0.00015 | 2.4e-6 | -0.20 | 0.560 |
+| 6 | 102,408,693 | 1.00004 | 0.00007 | 1.2e-6 | 0.60 | 0.315 |
+| 7 | 23,369,009 | 1.00003 | 0.00007 | 5.1e-7 | 0.37 | 0.205 |
 
 ## Known risks / open questions
 
@@ -929,9 +1261,6 @@ prod_v2 is retired are JC's call; not scheduled here.
   realized ensemble power is **1.109x the target** (exact, from the clipped P_G,
   2026-10-01); every other shell is exact. Grid sigma^2 of the galaxy field 2.3-3.3,
   matter 0.26-2.8.
-- prod_v2's growth rates come from astropy Planck18 (Om0 = 0.30966) while its distances
-  use Om0 = 0.3153; `suite.py` keeps the literals for drop-in fidelity. Reconciling is an
-  M4 decision.
 - The input P(k) is linear and truncated at kh = 1; the honest reach of the mocks is set
   by the grid (ell ~150-300 sample-weighted at 512^3), see chimera memory
   `project_lognormal_vs_disco_resolution`.

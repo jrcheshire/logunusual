@@ -30,16 +30,32 @@ CONVENTION = "LSS"  # D(0) = 1; f_NL^LSS = f_NL^CMB / g0
 _PHI_PER_ZETA_SQ = 9.0 / 25.0  # (Phi / zeta)^2 in matter domination
 
 
+def _E(x, omega_m):
+    """H(a) / H0 of flat LCDM without radiation."""
+    return np.sqrt(omega_m / x**3 + 1.0 - omega_m)
+
+
+def _heath_integral(a: float, omega_m: float) -> float:
+    """`int_0^a da' / (a' E(a'))^3`."""
+    integrand = lambda x: 1.0 / (x * _E(x, omega_m)) ** 3  # noqa: E731
+    return quad(integrand, 0.0, a, epsabs=0.0, epsrel=1e-12)[0]
+
+
 def growth_md(z: float, omega_m: float) -> float:
     """Linear growth of flat LCDM (no radiation), normalised to `a` in matter
     domination: `D = (5/2) Om E(a) int_0^a da' / (a' E(a'))^3` (Heath 1977)."""
     a = 1.0 / (1.0 + z)
+    return 2.5 * omega_m * _E(a, omega_m) * _heath_integral(a, omega_m)
 
-    def E(x):
-        return np.sqrt(omega_m / x**3 + 1.0 - omega_m)
 
-    integral = quad(lambda x: 1.0 / (x * E(x)) ** 3, 0.0, a, epsabs=0.0, epsrel=1e-12)
-    return 2.5 * omega_m * E(a) * integral[0]
+def growth_rate_md(z: float, omega_m: float) -> float:
+    """Linear growth rate `f = dln D / dln a` of `growth_md`'s background, exactly:
+    `f = -3/2 Om(a) + 1 / (a^2 E(a)^3 I(a))`, with `I` the Heath integral. The
+    source of `suite`'s `Bin.f` literals (at `suite.OMEGA_M_DISTANCE`)."""
+    a = 1.0 / (1.0 + z)
+    E = _E(a, omega_m)
+    omega_m_a = omega_m / (a**3 * E**2)
+    return -1.5 * omega_m_a + 1.0 / (a**2 * E**3 * _heath_integral(a, omega_m))
 
 
 @dataclass(frozen=True)

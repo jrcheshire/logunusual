@@ -113,11 +113,12 @@ def test_config_yaml_round_trip_and_hash_scope(tmp_path):
 
 
 def test_fnl_config_keys_and_hash_scope(tmp_path):
-    # the worked v28 config hashes as it did before the f_NL keys existed (the hash
-    # stamped on the M3 seven-bin catalogs, jobs 1039040 and the laptop run)
+    # the worked v28 config's hash is pinned: the f_NL keys do not enter it at
+    # f_NL = 0. It last changed with the 160 Mpc/h buffer (M5); before that 719cfb12...
+    # (flat-LCDM growth rates, M5) and f9455b54... (the M3 seven-bin catalogs).
     v28 = RunConfig.from_yaml(Path(__file__).parents[1] / "configs/v28_default.yaml")
     assert v28.config_hash == (
-        "f9455b54e3602d9d089f7f993631c93f64c181f30a56021b59222243b89d249f"
+        "29242829ace44f7c916ea9a3f0acfdaf880ed421fba4bef59ee14b8520a1e651"
     )
     assert v28.png is None
     cfg, _ = _cfg(tmp_path)

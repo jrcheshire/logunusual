@@ -76,8 +76,9 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
 ## Code layout (`logunusual/`)
 
 - `suite.py` **[M0]** -- the default bin table `BIN_SUITE_V28` (frozen `Bin`s, now
-  with a `pk_file` name and an optional `pk_galaxy_file`, M4), `seed_for`, the seed base and stride, `RADIAL_BUFFER`, mask
-  constants, distance cosmology. Dependency-free.
+  with a `pk_file` name and an optional `pk_galaxy_file`, M4; `f` literals from
+  `fnl.growth_rate_md`, M5), `seed_for`, the seed base and stride, `RADIAL_BUFFER`,
+  mask constants, distance cosmology. Dependency-free.
 - `grid.py` **[M1]** -- `Box`, k-grids (rfft on z), Hermitian weights, the separable
   `sinc` windows, the CIC shot-noise alias factor (Jing 2005).
 - `pk.py` **[M1, M3]** -- TSV loader + `PowerSpectrum` (log-log cubic spline, power-law
@@ -91,7 +92,8 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
 - `fnl.py` **[M4]** -- local f_NL, LSS convention: `LocalPNG` (f_nl, p, delta_c, and
   the tables' A_s / n_s / k_pivot / omega_m), `poisson_M` (`sqrt(P / P_Phi) / g0`
   from the bin's own table), `delta_b`, `galaxy_spectrum` (exactly `b * b * P_gal`
-  at f_NL = 0; `galaxy_table=` is `P_gal`, M stays on the linear table), `growth_md`, `diagnostics` (`b(k_f)/b`, the k where b(k) changes sign).
+  at f_NL = 0; `galaxy_table=` is `P_gal`, M stays on the linear table), `growth_md`
+  and its exact `growth_rate_md` (the source of `Bin.f`, M5), `diagnostics` (`b(k_f)/b`, the k where b(k) changes sign).
 - `field.py` **[M1, M2, M3, M4]** -- JAX (eager, x64): white noise (numpy PCG64) ->
   Gaussian -> lognormal galaxy and matter fields -> displacement components
   (`psi_axes`, any subset of "xyz"; `Fields.psi` dict, `psi_flat`). `generate_fields`
@@ -106,8 +108,8 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
 - `sample.py` **[M1, M3]** -- numpy: intensity, per-slab RNG streams (`slab_rng`,
   `draw_slab`: Poisson then uniform-in-cell placement on one x-slab's own stream),
   own-cell plane-parallel RSD, `split_seed`, `default_workers`.
-- `shell.py` **[M2, M3]** -- `Shell` (rmin, rmax, buffer; `check_box`,
-  `required_buffer`), observer-centred `cell_window` / `slab_window` (radial window
+- `shell.py` **[M2, M3, M5]** -- `Shell` (rmin, rmax, buffer; `check_box`,
+  `required_buffer`, exact for the field, M5), observer-centred `cell_window` / `slab_window` (radial window
   and the angular pre-cut per slab), `AngularMask` (HEALPix h5, NESTED or RING, any
   NSIDE; `distance_to_set`), `select`, `rsd_radial`, `radial_histogram`, and the
   threaded `sample_shell` generator with `ShellStats`.
@@ -187,7 +189,8 @@ Grid `N^3`, box `L`, `dx = L/N`, `V_cell = dx^3`; cell centres at `(i + 0.5) dx`
    `configs/v28_halofit.yaml`. Finer grids were measured and dropped (ROADMAP M4): at
    2x a lognormal cannot reach halofit in bins 1-3 (grid sigma^2 15-20), and on every
    finer grid tried one extreme matter peak drives `f max|Psi|` past the 150 Mpc/h
-   buffer (bulk |Psi| unchanged).
+   buffer (bulk |Psi| unchanged; measured under the window-max guard, before M5's
+   exact guard).
 
 **Why not the Julia construction.** Henry's 0.11.0 applies a `sinc^-p` deconvolution
 to the lognormal field AFTER exponentiation. Measured here at bin-5 settings (128^3,
@@ -221,15 +224,24 @@ multiplied at cell level by the full-sky window `r_lo <= |x_centre| <= r_hi` wit
 periodic and unwindowed, so the grid identity (G3) is untouched. Each galaxy is
 displaced radially by its own cell's displacement, `s = x + f (Psi . x / r^2) x`, then
 kept iff `rmin <= |s| <= rmax` (inclusive) and, with a mask, the HEALPix pixel of `s`
-is set (`hp.vec2pix`). No periodic wrap after the shift (a galaxy can only leave the box
-from a buffer cell touching a face and is outside the shell either way; the count is
+is set (`hp.vec2pix`). No periodic wrap after the shift (a galaxy that leaves the box
+is beyond `L/2 >= rmax + buffer`, outside the shell either way; the count is
 reported). The buffer must exceed a cell diagonal and `rmax + buffer <= L/2`
-(`Shell.check_box`, config time) AND, for the realized field, `sqrt(3)/2 dx +
-f max|Psi|` over the drawn cells (`Shell.required_buffer`; `sample_shell` raises
-below it and records `psi_max` / `required_buffer` per bin). The production 150 Mpc/h
-covers bin 2's ~113-128 (the lognormal displacement tail: `max|Psi|` 150-175 Mpc/h
-at 256^3 against `psi_rms` 5); test fixtures with 20 Mpc/h were short and were
-resized (2026-09-20). With a mask, the **angular pre-cut** (`slab_window`) drops the
+(`Shell.check_box`, config time) AND cover the realized field's exact requirement
+(`Shell.required_buffer`, M5): the largest distance from the shell of any cell, over
+the whole box, whose galaxies can reach it. The test is the SIGNED line-of-sight shift
+(`reach_interval`, 2026-10-03): `|s| = | |x| + f Psi_c . x_hat |` bounded over the cell
+by `|x|` in `r_c +- h` and `f Psi_c . x_hat` in `f Psi_c . c_hat +- |f||Psi_c| chi`
+(`chi` the chord the cell subtends), so an outward or tangential displacement beyond
+the shell, or an inward one that overshoots the observer, does not count;
+`sample_shell` raises below it and records `required_buffer` and the window's
+`psi_max` per bin. A displacement inside the drawn window never counts. Until M5 the
+guard was the bound `sqrt(3)/2 dx + f max|Psi|` over the window: the lognormal
+matter field's densest cells put that at 113-190 Mpc/h in bins 1-3 (max f|Psi| 20-30x
+the rms), which failed realization 50 in bin 1 against the 150 buffer (ROADMAP M5).
+The default buffer is 160 Mpc/h since M5 (2026-10-06): under the line-of-sight guard
+the worst of the 100 M5 realizations needs 150.9 (bin 1), and capping the velocity
+source to shrink the tail was measured and not adopted (ROADMAP M5). With a mask, the **angular pre-cut** (`slab_window`) drops the
 cells whose galaxies cannot land in a set pixel: radial RSD keeps direction, so the
 test is `AngularMask.distance_to_set` at the cell centre's pixel against
 `cell_angular_radius(r_c) + 2 max_pixrad` -- an exact superset of the feeding cells
@@ -284,10 +296,13 @@ them in both directions (G10).
 - Ratios are formed per realization, then averaged; each gate has its own seed range.
 - Bands: kf-shells merged from low k until each holds `n_min_indep(n_real)` independent
   modes (so a Gaussian-scatter SE resolves 2% at 3 sigma); `gates.band_edges`.
-- Growth rate: `Bin.f` are the prod_v2 literals, generated with astropy Planck18
-  (Om0 = 0.30966, 0.06 eV neutrino), NOT the distance cosmology's Om0 = 0.3153; they
-  differ by 0.4-0.9%. Pinned by `tests/test_suite.py`; a deliberate change is an M4
-  decision, not a cleanup.
+- Growth rate: `Bin.f` is the exact linear growth rate of the distance cosmology's
+  flat-LCDM background (Om0 = 0.3153, the CAMB tables' 0.3152), from
+  `fnl.growth_rate_md`, so the velocities and f_NL's `g0` share one background
+  (M5, 2026-10-01). It sits 0.13-0.14% below CAMB's `f sigma8 / sigma8` at every
+  z_eff (radiation and neutrino clustering, which the integral omits). Until M5 these
+  were prod_v2's literals (astropy Planck18 Om0 = 0.30966, `Om^0.55`), 0.5-0.9% low;
+  every catalog and the v28 config hash changed with the switch.
 - The default input P(k) is **linear CAMB truncated at kh = 1.0**; the grid Nyquist
   (0.20-0.40 h/Mpc) binds first. Halofit only pays with a finer grid (M4); the 2x
   grids' corners reach k = 1.39, so they take the kh-10 tables. The kh-10 linear
@@ -412,5 +427,9 @@ them in both directions (G10).
   v28 grids (descoped from finer grids, JC): `make_pk_tables.py` + P1 (byte-identical),
   two tables per bin, pair check, raise on clipping with a galaxy table, G15 passed,
   seven-bin realization 0 ok. Open, not scheduled: velocities on finer cells.
+- **M5 ensemble DONE (2026-10-07)** on branch `jc/m5-ensemble`: 100 realizations of
+  `configs/v28_halofit.yaml` at f_NL = 0 on deneb (job 2117, buffer 160, 1.5 TB in
+  `/work/jamie/logunusual/m5_b160/`); E1 and E2 pass (`ROADMAP.md` M5). Replaces the
+  retired prod_v2.
 - Open, not blocking: the 1.28x closure arm (the post-transform deconvolution's
   clipped mass; see Construction) and whether to report it -- JC's call.

@@ -1,10 +1,9 @@
 """logunusual -- fast lognormal galaxy mock generator (JAX + numpy).
 
-A drop-in producer of the SPHEREx per-bin lognormal mock catalogs (the prod_v2
-contract: observer-centred shells, RSD applied, parquet with x/y/z + bin), built
-so that the field stage runs on JAX (CPU or CUDA) and the galaxy stage is
-vectorised per cell instead of looped per galaxy. See ROADMAP.md for milestones
-and CLAUDE.md for the product contract and conventions.
+Per-bin lognormal mock catalogs (observer-centred shells, RSD applied, parquet with
+x/y/z + bin), built so that the field stage runs on JAX (CPU or CUDA) and the
+galaxy stage is vectorised per cell instead of looped per galaxy. See ROADMAP.md for
+milestones and CLAUDE.md for the product contract and conventions.
 """
 
 from importlib.metadata import PackageNotFoundError, version

@@ -17,7 +17,7 @@ mask:                       # omit (or null) for the full sky
 seed_base: 137000000        # seed = seed_base + realization * 1000 + bin index
 nbar_scale: 1.0             # multiplies every bin's nbar (smoke runs)
 grid_scale: 1.0             # multiplies every bin's N_grid (smoke runs)
-radial_buffer: 150.0        # Mpc/h drawn beyond the shell on both sides
+radial_buffer: 160.0        # Mpc/h drawn beyond the shell on both sides
 jitter_p: 1                 # uniform-in-cell placement (the validated construction)
 n_workers: null             # sampler threads, one x-slab per task (null: core count)
 angular_precut: true        # draw only cells whose galaxies can land in the mask
@@ -42,7 +42,7 @@ bins:
   N_grid: 192
   nbar: 0.07347
   b: 1.03
-  f: 0.581925899217631
+  f: 0.585721401221273
   pk_file: matterpower_camb_lin_kmax10_zeff=0.1.tsv
   pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=0.1.tsv
 - name: bin02
@@ -56,7 +56,7 @@ bins:
   N_grid: 256
   nbar: 0.04166
   b: 1.32
-  f: 0.6797684347521443
+  f: 0.6849019867378581
   pk_file: matterpower_camb_lin_kmax10_zeff=0.3.tsv
   pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=0.3.tsv
 - name: bin03
@@ -70,7 +70,7 @@ bins:
   N_grid: 384
   nbar: 0.01556
   b: 1.45
-  f: 0.7557107920438596
+  f: 0.7612297870023778
   pk_file: matterpower_camb_lin_kmax10_zeff=0.5.tsv
   pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=0.5.tsv
 - name: bin04
@@ -84,7 +84,7 @@ bins:
   N_grid: 448
   nbar: 0.0114
   b: 1.57
-  f: 0.8127713696136714
+  f: 0.8181973393109712
   pk_file: matterpower_camb_lin_kmax10_zeff=0.7.tsv
   pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=0.7.tsv
 - name: bin05
@@ -98,7 +98,7 @@ bins:
   N_grid: 512
   nbar: 0.008482
   b: 1.76
-  f: 0.8550542749312783
+  f: 0.8602004951231208
   pk_file: matterpower_camb_lin_kmax10_zeff=0.9.tsv
   pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=0.9.tsv
 - name: bin06
@@ -112,7 +112,7 @@ bins:
   N_grid: 512
   nbar: 0.001808
   b: 2.22
-  f: 0.9096055989924714
+  f: 0.9141354303816462
   pk_file: matterpower_camb_lin_kmax10_zeff=1.3.tsv
   pk_galaxy_file: matterpower_camb_halofit_kmax10_zeff=1.3.tsv
 - name: bin07
@@ -126,5 +126,5 @@ bins:
   N_grid: 512
   nbar: 0.0003491
   b: 3.29
-  f: 0.950584507968171
+  f: 0.9544897124652842
   pk_file: matterpower_camb_lin_kmax10_zeff=1.9.tsv

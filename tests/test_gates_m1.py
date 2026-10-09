@@ -4,12 +4,12 @@ bands are derived from the tolerance and the seed count (`gates.n_min_indep`).""
 import numpy as np
 import pytest
 
-from logunusual import field, gates
+from logunusual import field, gates, suite
 from logunusual.grid import Box
 
 pytestmark = pytest.mark.slow
 
-B5, F5 = 1.76, 0.8550542749312783  # bin-5 bias and growth rate (suite.py)
+B5, F5 = suite.BIN_SUITE_V28[4].b, suite.BIN_SUITE_V28[4].f  # bin 5
 BOX = Box(128, 1000.0)  # dx = 7.8 Mpc/h, production-like cell
 BOX_EST = Box(256, 1000.0)
 NBAR = 3e-3
