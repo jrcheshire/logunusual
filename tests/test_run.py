@@ -83,9 +83,6 @@ def _cfg(tmp_path, pk_dir=DATA, **kw):
     return RunConfig.from_dict(d), fsky
 
 
-# ------------------------------------------------------------------------ config
-
-
 def test_config_yaml_round_trip_and_hash_scope(tmp_path):
     cfg, _ = _cfg(tmp_path)
     (tmp_path / "c.yaml").write_text(cfg.to_yaml())
@@ -96,7 +93,6 @@ def test_config_yaml_round_trip_and_hash_scope(tmp_path):
     assert other.config_hash == cfg.config_hash
     assert _cfg(tmp_path, nbar_scale=0.5)[0].config_hash != cfg.config_hash
     assert _cfg(tmp_path, mask=None)[0].config_hash != cfg.config_hash
-    # defaults: the v28 table
     d = default_config()
     assert d.bins == suite.BIN_SUITE_V28 and d.seed_base == suite.SEED_BASE
     assert RunConfig.from_dict(
@@ -114,8 +110,7 @@ def test_config_yaml_round_trip_and_hash_scope(tmp_path):
 
 def test_fnl_config_keys_and_hash_scope(tmp_path):
     # the worked v28 config's hash is pinned: the f_NL keys do not enter it at
-    # f_NL = 0. It last changed with the 160 Mpc/h buffer (M5); before that 719cfb12...
-    # (flat-LCDM growth rates, M5) and f9455b54... (the M3 seven-bin catalogs).
+    # f_NL = 0, and a change to it means every v28 catalog changes.
     v28 = RunConfig.from_yaml(Path(__file__).parents[1] / "configs/v28_default.yaml")
     assert v28.config_hash == (
         "29242829ace44f7c916ea9a3f0acfdaf880ed421fba4bef59ee14b8520a1e651"
@@ -125,7 +120,6 @@ def test_fnl_config_keys_and_hash_scope(tmp_path):
     fnl_cfg, _ = _cfg(tmp_path, f_nl=10.0, primordial={"n_s": 0.96})
     assert fnl_cfg.config_hash != cfg.config_hash
     assert _cfg(tmp_path, f_nl=10.0, fnl_p=1.6)[0].config_hash != fnl_cfg.config_hash
-    # at f_NL = 0 the other f_NL keys do not move the hash
     assert _cfg(tmp_path, fnl_p=1.6)[0].config_hash == cfg.config_hash
     (tmp_path / "f.yaml").write_text(fnl_cfg.to_yaml())
     back = RunConfig.from_yaml(tmp_path / "f.yaml")
@@ -147,6 +141,7 @@ def test_fnl_realization_end_to_end(tmp_path):
     for b, row in zip(cfg.bins, s["bins"]):
         m = io.bin_metadata(meta, b.index)
         assert float(m["fnl_delta_b_kf"]) == row["fnl_delta_b_kf"] > 0
+        assert row["fnl_k_zero"] is None and m["fnl_k_zero"] == "none"  # b(k) > 0
     # the Gaussian run writes f_nl = 0 and nothing else of the f_NL block
     g, _ = _cfg(tmp_path, output_dir=str(tmp_path / "g"))
     generate_realization(g, 0, log=lambda *a: None)
@@ -163,9 +158,6 @@ def test_effective_bin_scaling(tmp_path):
     rows = plan_realization(cfg, 3)
     assert [r["seed"] for r in rows] == [suite.seed_for(3, 1), suite.seed_for(3, 2)]
     assert rows[0]["ic_seed"] != rows[0]["draw_seed"]
-
-
-# ------------------------------------------------------------------------ driver
 
 
 def test_generate_realization_end_to_end(tmp_path):
@@ -187,6 +179,9 @@ def test_generate_realization_end_to_end(tmp_path):
         assert float(m["nbar_target"]) == b.nbar
         assert m["pk_file"] == PK and len(m["pk_sha256"]) == 64
         assert json.loads(m["psi_rms"]).keys() == {"x", "y", "z"}
+        for key in ("n_clipped_galaxy", "n_clipped_matter"):
+            assert int(m[key]) >= 0
+        float(m["clipped_power_fraction_matter"])
         d = io.read_bin(p, b.index)
         r = np.sqrt(d["x"] ** 2 + d["y"] ** 2 + d["z"] ** 2)
         assert r.min() >= b.rmin and r.max() <= b.rmax
@@ -196,14 +191,12 @@ def test_generate_realization_end_to_end(tmp_path):
     assert generate_realization(cfg, 0, log=lambda *a: None) is None
     generate_realization(cfg, 1, log=lambda *a: None)
     assert catalog_path(cfg, 1).read_bytes() != p.read_bytes()
-    # a bin subset
     generate_realization(cfg, 2, bins=[2], log=lambda *a: None)
     assert io.check_layout(catalog_path(cfg, 2)).bins == [2]
 
 
 def test_uniform_input_gives_poisson_counts_through_the_driver(tmp_path):
-    # P_in x 1e-4 written as a TSV: the whole path (window, RSD, mask, writer) must
-    # return N_kept ~ Poisson(nbar fsky V_shell) per bin, exactly.
+    # P_in x 1e-4: through the whole path, N_kept ~ Poisson(nbar fsky V_shell) exactly
     k, P = np.loadtxt(DATA / PK, unpack=True)
     pk_dir = tmp_path / "pk"
     pk_dir.mkdir()
@@ -247,9 +240,6 @@ def test_two_processes_write_the_same_bytes(tmp_path):
     else:  # macOS XLA can wobble in the last bit: characterised, not pinned
         assert a["x"].size == b["x"].size
         assert np.max(np.abs(a["x"] - b["x"])) < 1e-9
-
-
-# --------------------------------------------------------------------------- cli
 
 
 def test_cli_commands(tmp_path, capsys):
@@ -297,9 +287,6 @@ def test_cli_commands(tmp_path, capsys):
 
     d = yaml.safe_load(capsys.readouterr().out)
     assert len(d["bins"]) == 7 and d["seed_base"] == suite.SEED_BASE
-
-
-# ----------------------------------------------------------------- two P(k) tables
 
 
 def _two_table_dir(tmp_path, factor):

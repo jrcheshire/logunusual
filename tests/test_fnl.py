@@ -1,5 +1,5 @@
-"""f_NL scale-dependent bias (M4): the M(k) normalisation (G12), the growth integral,
-and the shape of b(k)."""
+"""f_NL scale-dependent bias: the M(k) normalisation, the growth integral, the shape
+of b(k), and the galaxy-table split (M from the linear table)."""
 
 import warnings
 
@@ -12,14 +12,13 @@ from logunusual.grid import Box
 Z_TABLE = 0.9  # the tests/data table (conftest.PK_TSV)
 B5 = 1.76
 
-# Radiation (photons + 3.046 massless neutrinos), Omega_r h^2, for the G12 bound.
+# Radiation (photons + 3.046 massless neutrinos), Omega_r h^2, for the M(k) bound.
 OMEGA_R_H2 = 4.15e-5
 
 
-def _g12_residual(spectrum, png):
-    """`M / M_{T=1}` at the table's lowest node, both in the LSS convention. The
-    reference takes its growth from the integral directly, never from `png`, so a
-    wrong normalisation inside `png` cannot cancel against it."""
+def _m_residual(spectrum, png):
+    """`M / M_{T=1}` at the table's lowest node (LSS convention); the reference's growth
+    comes from the integral, never from `png`, so a wrong `png` cannot cancel."""
     k = spectrum.k[:1]
     om = suite.OMEGA_M_DISTANCE
     D = fnl.growth_md(Z_TABLE, om) / fnl.growth_md(0.0, om)
@@ -27,12 +26,11 @@ def _g12_residual(spectrum, png):
     return float(fnl.poisson_M(k, spectrum, png)[0] / m_lim[0])
 
 
-def _g12_bound(spectrum, png):
-    """What separates the table's M from the T = 1 limit with this growth integral, at
-    the lowest node: radiation, which the integral omits, shifts D by order
-    `(1 + z) a_eq`; and T(k) itself departs from 1 by at most ~2.2 q at low k (BBKS's
-    linear coefficient, `q = k / (Om h)` in h/Mpc). Measured 2026-10-01 on all seven
-    v28 tables: 1 - r = 4.5e-4 (z 0.1) to 1.25e-3 (z 1.9), each 1.5-3x inside this
+def _m_bound(spectrum, png):
+    """Table M vs the T = 1 limit at the lowest node: radiation, which the integral
+    omits, shifts D by order `(1 + z) a_eq`, and T(k) departs from 1 by at most ~2.2 q
+    at low k (BBKS's linear coefficient, `q = k / (Om h)` in h/Mpc). Measured on all
+    seven v28 tables: 1 - r = 4.5e-4 (z 0.1) to 1.25e-3 (z 1.9), 1.5-3x inside this
     bound; reading the pivot as 0.05 h/Mpc moves r by 0.7%, 4-5x outside it."""
     h = suite.H0_DISTANCE / 100.0
     a_eq = OMEGA_R_H2 / h**2 / png.omega_m
@@ -40,17 +38,17 @@ def _g12_bound(spectrum, png):
     return (1.0 + Z_TABLE) * a_eq + 2.2 * q_min
 
 
-def test_g12_m_matches_the_large_scale_limit(spectrum):
+def test_m_matches_the_large_scale_limit(spectrum):
     png = fnl.LocalPNG(f_nl=1.0)
-    r = _g12_residual(spectrum, png)
-    assert abs(1.0 - r) <= _g12_bound(spectrum, png), r
+    r = _m_residual(spectrum, png)
+    assert abs(1.0 - r) <= _m_bound(spectrum, png), r
 
 
 @pytest.mark.parametrize(
     "mutation",
     ["pivot_in_h_per_mpc", "no_nine_25ths", "cmb_normalisation", "A_s_off_by_2pct"],
 )
-def test_g12_fails_on_a_wrong_normalisation(spectrum, monkeypatch, mutation):
+def test_m_check_fails_on_a_wrong_normalisation(spectrum, monkeypatch, mutation):
     png = fnl.LocalPNG(f_nl=1.0)
     if mutation == "pivot_in_h_per_mpc":
         png = fnl.LocalPNG(f_nl=1.0, k_pivot=0.05)
@@ -60,8 +58,8 @@ def test_g12_fails_on_a_wrong_normalisation(spectrum, monkeypatch, mutation):
         object.__setattr__(png, "g0", 1.0)
     else:
         png = fnl.LocalPNG(f_nl=1.0, A_s=1.02 * suite.PRIMORDIAL_AS)
-    r = _g12_residual(spectrum, png)
-    assert abs(1.0 - r) > _g12_bound(spectrum, fnl.LocalPNG(f_nl=1.0)), r
+    r = _m_residual(spectrum, png)
+    assert abs(1.0 - r) > _m_bound(spectrum, fnl.LocalPNG(f_nl=1.0)), r
 
 
 def test_growth_integral():

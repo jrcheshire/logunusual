@@ -149,9 +149,9 @@ class RunConfig:
         return d
 
     def hash_dict(self) -> dict:
-        """What the config hash covers: everything but names and machine paths. The
-        f_NL keys enter only when f_NL != 0, and a bin's `pk_galaxy_file` only when set,
-        so a Gaussian single-table config hashes as it did before they existed."""
+        """What the config hash covers: everything but the run name, machine paths
+        (the mask only as present / absent) and `n_workers`. The f_NL keys enter only
+        when f_NL != 0, and a bin's `pk_galaxy_file` only when set (`_bin_dict`)."""
         d = self.to_dict()
         for k in ("run_name", "output_dir", "pk_dir", "mask", "n_workers"):
             d.pop(k)
@@ -223,8 +223,7 @@ class RunConfig:
 
 
 def _bin_dict(b: suite.Bin) -> dict:
-    """`asdict(b)` without an empty `pk_galaxy_file`, so a single-table bin
-    serialises and hashes as it did before the field existed."""
+    """`asdict(b)` without an empty `pk_galaxy_file` (neither serialised nor hashed)."""
     d = asdict(b)
     if not d["pk_galaxy_file"]:
         d.pop("pk_galaxy_file")

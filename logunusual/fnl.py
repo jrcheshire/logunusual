@@ -6,14 +6,13 @@
 in the LSS convention, D(0) = 1: `f_NL^LSS = f_NL^CMB / g0`, with `g0 = D_md(0)` the
 growth today in the normalisation `D_md -> a` in matter domination.
 
-M is not built from a transfer function. With `Phi = (3/5) zeta` in matter domination
-the bin's own linear table is `P(k, z) = M_CMB(k, z)^2 P_Phi(k)`, with
-`P_Phi = (9/25) 2 pi^2 A_s k^-3 (k / k_pivot)^(n_s - 1)`, so `M_CMB = sqrt(P / P_Phi)`
-exactly, z enters through the table, and `M = M_CMB / g0`. The `A_s`, `n_s` and pivot
-must be the ones the table was made with (`LocalPNG` defaults: the v28 tables, `suite`).
+M comes from the bin's own linear table, not a transfer function: with
+`Phi = (3/5) zeta`, `P(k, z) = M_CMB^2 P_Phi`, `P_Phi = (9/25) 2 pi^2 A_s k^-3
+(k / k_pivot)^(n_s - 1)`, so `M = sqrt(P / P_Phi) / g0`. `A_s`, `n_s` and the pivot
+must be the ones the table was made with (`LocalPNG` defaults: the v28 tables).
 
-Only the galaxy target changes (`b^2 P -> b(k)^2 P`); the matter field and the
-velocities do not. A lognormal field carries no f_NL bispectrum.
+Only the galaxy target changes (`b^2 P -> b(k)^2 P`); matter field and velocities do
+not. A lognormal field carries no f_NL bispectrum. Entry point: `galaxy_spectrum`.
 """
 
 from dataclasses import asdict, dataclass
@@ -49,9 +48,9 @@ def growth_md(z: float, omega_m: float) -> float:
 
 
 def growth_rate_md(z: float, omega_m: float) -> float:
-    """Linear growth rate `f = dln D / dln a` of `growth_md`'s background, exactly:
-    `f = -3/2 Om(a) + 1 / (a^2 E(a)^3 I(a))`, with `I` the Heath integral. The
-    source of `suite`'s `Bin.f` literals (at `suite.OMEGA_M_DISTANCE`)."""
+    """Exact linear growth rate `f = dln D / dln a` of `growth_md`'s background,
+    `-3/2 Om(a) + 1 / (a^2 E(a)^3 I(a))`, `I` the Heath integral; the source of the
+    `suite.Bin.f` literals."""
     a = 1.0 / (1.0 + z)
     E = _E(a, omega_m)
     omega_m_a = omega_m / (a**3 * E**2)
@@ -117,8 +116,7 @@ def delta_b(k, b: float, spectrum, png: LocalPNG):
 def galaxy_spectrum(spectrum, b: float, png: LocalPNG | None = None, galaxy_table=None):
     """The galaxy target `b(k)^2 P_gal(k)` as a callable of k. `spectrum` is the
     linear table and sets M(k); `galaxy_table` (e.g. halofit) is `P_gal`, None =
-    `spectrum`. With `png` None or `f_nl == 0` it is exactly `b * b * P_gal(k)`, the
-    f_NL-free expression, so that path is bitwise unchanged."""
+    `spectrum`. With `png` None or `f_nl == 0` it is exactly `b * b * P_gal(k)`."""
     target = spectrum if galaxy_table is None else galaxy_table
     if png is None or png.f_nl == 0:
         return lambda k: b * b * target(k)
@@ -131,9 +129,9 @@ def galaxy_spectrum(spectrum, b: float, png: LocalPNG | None = None, galaxy_tabl
 
 
 def diagnostics(spectrum, b: float, png: LocalPNG, box) -> dict:
-    """What the scale-dependent bias does on `box`: `delta_b` and `b(k)/b` at the
-    fundamental, and the lowest grid |k| at or above which `b(k)` has changed sign
-    (`k_zero`, None if it never does on the grid)."""
+    """The scale-dependent bias on `box`: `delta_b` and `b(k)/b` at the fundamental,
+    and `k_zero`, the first `k_f sqrt(q)` (integer q up to the grid corner) at which
+    `b(k)` has changed sign (None if it never does)."""
     n2 = box.n_mesh // 2
     kq = box.k_f * np.sqrt(np.arange(1, 3 * n2 * n2 + 1, dtype=np.float64))
     bk = b + delta_b(kq, b, spectrum, png)

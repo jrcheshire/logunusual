@@ -1,17 +1,13 @@
-"""The catalog file format (parquet) and its self-check.
+"""The catalog file format (parquet) and its self-check (`docs/catalog.md`).
 
-Layout (this package's own spec):
-- Columns, in this order: `x, y, z: float64` (Mpc/h, observer at the origin, redshift
-  space) and `bin: int8` (the bin's index from the run config; always present).
-- Rows are bin-contiguous with bins ascending. Row groups hold exactly
-  `row_group_rows` rows (default 2^20) except the last row group of each bin, so a row
-  group never mixes bins; column statistics are written (a reader can pick a bin's
-  row groups from the `bin` column's min/max without touching the data).
-- Consecutive row groups are byte-contiguous, so one bin is one byte range.
-- File-level metadata: flat string keys (`read_metadata`); global keys and per-bin
-  keys prefixed `bin{index:02d}.`.
-- The file is written as `<name>.tmp` and renamed on close: a file with the final name
-  is complete.
+- Columns, in order: `x, y, z: float64` (Mpc/h, observer at the origin, redshift
+  space) and `bin: int8` (the bin's index).
+- Rows bin-contiguous, bins ascending; row groups of exactly `row_group_rows` (default
+  2^20) except each bin's last, so none mixes bins; column statistics written (a
+  reader picks a bin's row groups by `bin` min/max); one bin is one byte range.
+- File-level metadata: flat string keys, global and per-bin `bin{index:02d}.*`.
+- Written as `<name>.tmp` and renamed on close: a file with the final name is complete.
+Entry points: `CatalogWriter`, `read_metadata`, `check_layout`, `read_bin`.
 """
 
 from dataclasses import dataclass, field
@@ -62,8 +58,9 @@ def bin_key(index: int, name: str) -> str:
 
 
 def encode_metadata(meta: dict) -> dict:
-    """Every value to `str` (parquet key-value metadata is bytes/str only)."""
-    return {str(k): str(v) for k, v in meta.items()}
+    """Every value to `str` (parquet key-value metadata is bytes/str only); `None` is
+    written as "none"."""
+    return {str(k): "none" if v is None else str(v) for k, v in meta.items()}
 
 
 class CatalogWriter:

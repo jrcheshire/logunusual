@@ -1,6 +1,6 @@
-"""Field-stage contracts: colouring identity (G2), lognormal positivity and mean,
-displacement against a plane wave and the divergence identity, target deconvolution,
-in-process reproducibility."""
+"""Field-stage contracts: colouring identity, lognormal positivity and mean,
+displacement identities, deconvolved target, dtype/jit knobs, f_NL and galaxy-table
+targets, in-process reproducibility."""
 
 import platform
 
@@ -22,10 +22,8 @@ def test_target_on_grid_is_deconvolved_power(spectrum):
 
 def test_colouring_reproduces_pkG_in_the_ensemble():
     # Gaussian field: per-mode |G_k|^2 has variance P_G^2 over the INDEPENDENT
-    # (half-grid)
-    # modes, so the shell mean over n_seeds has SE = gaussian_se / sqrt(n_seeds).
-    # Gate:
-    # |z| < 4.5 everywhere and mean z^2 ~ 1 (measured 1.2 with 16 shells).
+    # (half-grid) modes, so the shell mean over n_seeds has SE gaussian_se /
+    # sqrt(n_seeds). Bar: |z| < 4.5 everywhere, mean z^2 ~ 1 (measured 1.2, 16 shells).
     box = Box(32, 320.0)
     _, _, kmag = grid.k_grid(box)
     pkG = 500.0 * np.exp(-((kmag * 8.0) ** 2) / 2)  # smooth, positive, DC nonzero
@@ -97,8 +95,8 @@ def test_generate_fields_contract(spectrum):
 
 
 def test_in_process_reproducibility_is_bitwise_or_characterised(spectrum):
-    # Umbrella record: XLA on macOS-arm64 CPU can differ in the last bit between
-    # runs; Linux XLA CPU is deterministic. Assert bitwise on Linux; on macOS record.
+    # XLA on macOS-arm64 CPU can differ in the last bit between runs; Linux XLA CPU
+    # is deterministic. Bitwise on Linux; on macOS bounded and printed.
     box = Box(32, 320.0)
     a = np.asarray(field.generate_fields(spectrum, 1.76, box, 5).delta_g)
     b = np.asarray(field.generate_fields(spectrum, 1.76, box, 5).delta_g)
@@ -110,7 +108,7 @@ def test_in_process_reproducibility_is_bitwise_or_characterised(spectrum):
     if platform.system() == "Linux":
         assert n_diff == 0
     else:
-        assert max_rel < 1e-12  # characterised, not pinned
+        assert max_rel < 1e-12
 
 
 def test_displacement_components_satisfy_the_divergence_identity():
@@ -131,7 +129,7 @@ def test_displacement_components_satisfy_the_divergence_identity():
     rhs = 1j * np.asarray(dk)
     rhs[0, 0, 0] = 0.0
     assert np.allclose(lhs, rhs, atol=1e-10)
-    # the z path is the M1 one, bitwise
+    # the z component is `displacement_z_k`, bitwise
     assert np.array_equal(
         np.asarray(field.displacement_k(dk, box, "z")),
         np.asarray(field.displacement_z_k(dk, box)),
@@ -217,10 +215,8 @@ def test_resolve_dtype_rejects_unknown():
 
 
 def test_f64_is_the_default_dtype(spectrum):
-    # The knob must not move the default path. macOS XLA CPU can differ in the last
-    # bit between two runs of the SAME program (see the reproducibility test above),
-    # so this is bitwise on Linux and characterised on macOS -- the repo's
-    # reproducibility gate is what pins the f64 path.
+    # the default path; bitwise on Linux, bounded on macOS where two runs of the
+    # SAME program can differ in the last bit (reproducibility test above)
     box = Box(32, 320.0)
     a = np.asarray(field.generate_fields(spectrum, 1.76, box, 7).delta_g)
     b = np.asarray(field.generate_fields(spectrum, 1.76, box, 7, dtype="f64").delta_g)
@@ -231,9 +227,8 @@ def test_f64_is_the_default_dtype(spectrum):
 
 
 def test_f32_stays_f32_end_to_end(spectrum):
-    # Every device array the stage returns must be float32. The trap this guards is
-    # that `k_components` is numpy float64 and, with x64 enabled, one float64 array
-    # in the displacement expression widens the whole of it back to complex128.
+    # Every returned device array must be float32: with x64 enabled, one float64
+    # array (`k_components` is numpy float64) widens a whole expression to complex128.
     box = Box(16, 160.0)
     F = field.generate_fields(
         spectrum, 1.76, box, 21, keep_matter=True, psi_axes="xyz", dtype="f32"
@@ -248,13 +243,11 @@ def test_f32_stays_f32_end_to_end(spectrum):
 
 
 def test_f32_computes_the_same_field_as_f64(spectrum):
-    # f32 is a footprint knob, not a different mock: same white noise, same target,
-    # so the fields must agree to float32 round-off. The scale of that round-off is
-    # eps32 times the LARGEST magnitude in the chain, not the rms -- a lognormal's
-    # peak sits 30-100x its rms, so an rms-normalised tolerance would just be
-    # measuring that ratio. Measured 2-22 eps32 at (N, L) = (32, 320), (64, 640) and
-    # (32, 1000), i.e. sigma2 from 0.6 to 3.0, and it does not grow with N; the gate
-    # is 100 eps32, which round-off through three FFTs and an exp cannot exceed.
+    # f32 is a footprint knob, not a different mock: the fields must agree to float32
+    # round-off, whose scale is eps32 times the LARGEST magnitude in the chain, not the
+    # rms (a lognormal's peak sits 30-100x its rms). Measured 2-22 eps32 at (N, L) =
+    # (32, 320), (64, 640), (32, 1000), sigma2 0.6 to 3.0, not growing with N. Bar:
+    # 100 eps32, which round-off through three FFTs and an exp cannot exceed.
     box = Box(32, 320.0)
     kw = dict(keep_matter=True, psi_axes="xyz")
     A = field.generate_fields(spectrum, 1.76, box, 11, **kw)
@@ -273,12 +266,11 @@ def test_f32_computes_the_same_field_as_f64(spectrum):
 
 
 def test_jit_is_not_bit_preserving_but_is_round_off(spectrum):
-    # M3 asks for jit WITH a bitwise-before-jit check. It is not bitwise: XLA fuses
-    # and reassociates, so a third to seven eighths of the cells move. What the gate
-    # holds is that the move is round-off and nothing else -- 0.25-4.0 float64 eps of
-    # the field's own maximum, measured over 8 seeds at N = 64 and 96 (the per-CELL
-    # relative figure runs to 1e-10 and higher, but that is the metric blowing up at
-    # zero crossings, the same artefact the ULP table warns about). Gate: 20 eps64.
+    # jit is not bitwise: XLA fuses and reassociates, so a third to seven eighths of
+    # the cells move. The move must be round-off and nothing else: 0.25-4.0 float64
+    # eps of the field's own maximum, measured over 8 seeds at N = 64 and 96 (a
+    # per-CELL relative figure runs to 1e-10 and higher only because it blows up at
+    # zero crossings). Bar: 20 eps64.
     box = Box(64, 640.0)
     kw = dict(keep_matter=True, psi_axes="xyz")
     A = field.generate_fields(spectrum, 1.76, box, 3, **kw)
@@ -298,14 +290,12 @@ def test_jit_is_not_bit_preserving_but_is_round_off(spectrum):
         print(f"\n   {name}: jit vs eager {ulps:.2f} eps64 of max|field|")
         assert ulps < 20.0, (name, ulps)
     assert n_moved > 0, "jit was bit-preserving here -- the claim above needs redoing"
-    # and the field is still a lognormal overdensity
     assert float(np.asarray(B.delta_g).min()) > -1.0
     assert abs(float(np.asarray(B.delta_g).mean())) < 1e-13
 
 
 def test_galaxy_table_moves_the_galaxy_field_only(spectrum):
-    # two tables: the galaxy target takes `galaxy_table`, the matter field and the
-    # displacements stay the linear run's, bitwise
+    # the galaxy target takes `galaxy_table`; matter and displacements stay bitwise
     from logunusual.fnl import LocalPNG
 
     box = Box(32, 500.0)
@@ -338,9 +328,8 @@ def test_galaxy_table_moves_the_galaxy_field_only(spectrum):
 
 
 def test_clipping_galaxy_table_raises(spectrum):
-    # 32^3, L = 320, b = 1.76: the linear target clips nothing (sigma^2 3.0); a
-    # halofit-like boost P * (1 + 10 x / (1 + x)), x = (k / 0.3)^2, clips 6451 P_G
-    # modes (sigma^2 16.1, measured)
+    # the linear target clips nothing (sigma^2 3.0); the boost P * (1 + 10 x / (1 + x)),
+    # x = (k / 0.3)^2, clips 6451 P_G modes (sigma^2 16.1, measured)
     box = Box(32, 320.0)
     x = (spectrum.k / 0.3) ** 2
     nl = pk.PowerSpectrum(spectrum.k, spectrum.P * (1 + 10 * x / (1 + x)))

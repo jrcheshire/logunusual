@@ -1,9 +1,9 @@
-# logunusual run config: the seven v28 bins with a Takahashi-halofit galaxy target
-# (ROADMAP M4). Paths are placeholders. Each bin names two tables in pk_dir, both from
+# logunusual run config: the seven v28 bins with a Takahashi-halofit galaxy target.
+# Paths are placeholders. Each bin names two tables in pk_dir, both from
 # `pixi run -e tables pk-tables make --model {linear,halofit}`: `pk_file` (linear: the
 # matter field, the velocities and f_NL's M(k)) and `pk_galaxy_file` (halofit: the
 # galaxy target b^2 P only). Every other bin field is the v28 default, grids included:
-# halofit is attainable on them (finer grids are not, see ROADMAP M4), and a run with
+# halofit is attainable on them (see docs/construction.md), and a run with
 # a galaxy table raises on any clipped P_G mode. Bin 7 keeps the linear galaxy target:
 # its 5 fundamental modes clip with either table (realized 1.109x the linear target
 # there), so with a galaxy table it would raise; halofit is 1.06x linear at its

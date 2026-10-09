@@ -1,30 +1,21 @@
-"""M3: device memory, CPU-vs-CUDA agreement and per-stage wall of the field stage.
+"""Device memory, CPU-vs-CUDA agreement and per-stage wall of the field stage.
 
-    pixi run -e gpu python scripts/m3_device.py ladder
-    pixi run -e gpu python scripts/m3_device.py ladder --bins bin05 --dtype f32
-    pixi run -e gpu python scripts/m3_device.py ulp --n 64 128 256
-    pixi run -e gpu python scripts/m3_device.py wall --bin bin05
+    pixi run -e gpu python scripts/device.py ladder [--bins bin05] [--dtype f32] [--jit]
+    pixi run -e gpu python scripts/device.py ulp --n 64 128 256
+    pixi run -e gpu python scripts/device.py wall --bin bin05
+    pixi run -e gpu python scripts/device.py pkg --bin bin05
 
-`ladder` walks the v28 bins at their production `(N_grid, L_box, b)` -- bin01..bin05
-cover every distinct grid size, since bin06 and bin07 also run at 512^3 and a
-footprint is set by shape, not by which spectrum is on the grid. It runs one
-subprocess per point (a JAX process keeps no resettable peak counter) and reports TWO
-instruments: live `jax.live_arrays()` bytes, the M1 G9 instrument, and the device
-allocator's `peak_bytes_in_use`, which also counts XLA intra-op scratch and is
-therefore what decides whether a grid fits. An out-of-memory point is a RESULT: the
-child reports `oom` and exits 0, and only a non-OOM failure is an error.
-
-`--dtype f32` runs the SHIPPED field stage at `dtype="f32"` (`field.resolve_dtype`).
-It replaced a replica of the stage's array sequence, `probe_field_arrays`, which had
-to earn its number with a self-check against the real f64 peak and failed it (1.084 at
-256^3, job 1958); a knob in `field.py` needs no such licence.
-
-`ulp` compares the two backends inside ONE process, so a single jaxlib build is on
-both sides and the difference is the backend, not the wheel.
-
-`wall` blocks on every live array at each step boundary, which serialises JAX's async
-dispatch: the per-stage numbers are upper bounds and their sum exceeds the unblocked
-end-to-end time, which is reported alongside.
+`ladder`: one subprocess per (bin, dtype) at the bin's production `(N_grid, L_box, b)`
+(a JAX process has no resettable peak counter); the default bin01..bin05 cover every
+grid size, and a footprint is set by shape, not spectrum. Reports live
+`jax.live_arrays()` bytes (misses XLA intra-op scratch) and the allocator's
+`peak_bytes_in_use` (counts it, so it decides whether a grid fits); an out-of-memory
+point is a result, not an error.
+`ulp`: both backends in ONE process, so one jaxlib build and only the backend differs.
+`wall`: blocks at every step boundary, which serialises JAX's async dispatch, so the
+per-stage times are upper bounds; the unblocked end-to-end time is printed alongside.
+`pkg`: the P -> P_G step split into host / upload / device / sync, checked bitwise
+against the shipped call. Costs and measured tables: `docs/performance.md`.
 """
 
 import argparse
@@ -391,12 +382,10 @@ def run_pkg(args):
     """Split one `target_on_grid` + `grid_pkG` call into host work, upload, FFTs and
     device syncs.
 
-    The pieces are the REAL library calls in the order `field.generate_fields` makes
-    them: `radius_index`, `pk_on_grid`'s table + gather, `jitter_power_window`,
-    `grid_xi`, `grid_pk_from_xi` are each timed where they are called. The assembled
-    result is then compared bitwise against `grid_pkG(target_on_grid(...))` in the
-    same process, so a split that has drifted from the shipped path cannot be reported
-    as one.
+    The pieces are the REAL library calls in `field.generate_fields`' order, each timed
+    where it is called; the assembled result is compared bitwise against
+    `grid_pkG(target_on_grid(...))` in the same process, so a split that has drifted
+    from the shipped path reports MISMATCH.
     """
     import time
 
@@ -616,6 +605,8 @@ def main():
     p.set_defaults(func=run_pkg)
 
     args = ap.parse_args()
+    if args.mode == "pkg" and args.repeat < 1:
+        ap.error("--repeat must be >= 1 (the first run carries the bitwise self-check)")
     args.func(args)
 
 

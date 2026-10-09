@@ -100,6 +100,14 @@ def test_metadata_round_trip_and_empty_bin(tmp_path):
     assert io.read_bin(p, 2)["x"].size == 0
 
 
+def test_metadata_encodes_none_as_none():
+    assert io.encode_metadata({"a": None, "b": 1, "c": 0.5}) == {
+        "a": "none",
+        "b": "1",
+        "c": "0.5",
+    }
+
+
 def test_check_layout_flags_problems(tmp_path):
     p = tmp_path / "c.parq"
     _write(p, [(1, 10)], 100, meta={**META, "bins": "1,2,3"})

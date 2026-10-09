@@ -1,18 +1,11 @@
-"""Periodic-box P(k) estimator and the analytic references the gates use (numpy).
+"""Periodic-box P(k) estimator and the analytic references the checks use (numpy).
 
-- `cic_paint`: cloud-in-cell mass assignment with periodic wrap (disco-mocks
-  `xcheck.py`). `delta_k_from_positions` paints, forms the contrast, `rfftn`s and
-  (optionally) divides by the CIC amplitude window `sinc^2` per axis.
-- Shot noise for a CIC-painted Poisson process: Jing (2005) `1/nbar prod_i
-  [1 - 2/3 sin^2(k_i dx/2)]` before deconvolution (`grid.cic_shot_noise_factor`).
-- `power_multipoles`: `P = V/N^6 |delta_k|^2`, even Legendre multipoles about the
-  z axis, rfft half-grid weighted by its Hermitian multiplicity, shells of width
-  `k_f` starting at `k_f / 2` (DC excluded). Port of disco-mocks `rsd.py` to numpy.
-- Kaiser: `P_ell / P` boosts for `beta = f / b`.
-
-Aliasing is controlled by the caller's choice of estimator mesh: measuring a generator
-of mesh N on a mesh 2N keeps the generator's first zone clean of the estimator's own
-aliasing (< 0.1% at the generator Nyquist for a CDM slope; no interlacing needed).
+CIC painting and deconvolution, Jing (2005) shot noise, `power_multipoles`
+(`P = V/N^6 |delta_k|^2`, Legendre multipoles about z, Hermitian-weighted rfft
+half-grid, shells of width `k_f` from `k_f / 2`), Gaussian SEs, Kaiser boosts, and the
+coherent-alias `estimator_response`. Measure a generator of mesh N on a mesh 2N to
+keep the estimator's own aliasing out of the generator's first zone (< 0.1% at its
+Nyquist for a CDM slope).
 """
 
 import numpy as np
@@ -67,16 +60,13 @@ def effective_window(box: Box, box_est: Box, jitter_p: int, n_alias: int = 64):
         P_mesh(k) = |sum_n W_cic(k_n) T(k_n)|^2 P_grid(k),   k_n = k + 2 pi n / H,
 
     with `H` the estimator spacing, `W_cic = prod sinc^2`, `T = prod sinc^p` the jitter
-    window in generator-cell units. The alias images carry the SAME grid Fourier
-    coefficient up to a sign (the catalog is lattice-periodic with cell centres at
-    half-integer multiples of `dx`, so shifting `k` by `2 pi m / dx` multiplies the
-    grid coefficient by `(-1)^m`; image `n` of the estimator mesh is `m = r n` per
-    axis with `r = dx / H` the mesh ratio), so they add coherently with that sign; the
-    standard incoherent alias sum (Jing 2005) applies to the shot noise only. For an
-    even mesh ratio every sign is +; on the generator's own mesh (`r = 1`) the dominant
-    image (`n = -1`) SUBTRACTS (measured 2026-09-04: 6% at half the Nyquist, G11).
-    Separable, so the 3-d sum is a product of 1-d sums truncated at |n| <= n_alias
-    (terms fall as n^-(2+p)). Requires an integer mesh ratio."""
+    window in generator-cell units. The catalog is lattice-periodic with cell centres
+    at half-integer multiples of `dx`, so the alias images carry the SAME grid
+    coefficient times `(-1)^(r n)` per axis (`r = dx / H`, the integer mesh ratio) and
+    add coherently; the incoherent alias sum (Jing 2005) holds for shot noise only. On
+    an even-ratio mesh every sign is +; on the generator's own mesh the dominant image
+    SUBTRACTS (power 3.5% low at half the Nyquist, shell average). Separable; each 1-d
+    sum is truncated at |n| <= n_alias."""
     r = box_est.n_mesh / box.n_mesh
     if abs(r - round(r)) > 1e-12:
         raise ValueError(
@@ -165,11 +155,10 @@ def power_multipoles(delta_k, box: Box, *, ells=(0, 2, 4), shot_k=None, delta_k_
         mu = np.where(k_mag > 0, kz / k_mag, 0.0).ravel()
     P = P.ravel()
     wsum = np.bincount(idx, weights=herm, minlength=nb + 1)[:nb]
-    n_indep = np.bincount(idx, minlength=nb + 1)[:nb]
     out = {
         "k": 0.5 * (shell_edges(box)[1:] + shell_edges(box)[:-1]),
         "nmodes": wsum,  # full-grid count (the weight of the shell)
-        "n_indep": n_indep,  # half-grid count: the number of INDEPENDENT modes
+        "n_indep": 0.5 * wsum,  # independent modes, as `gaussian_se` counts them
     }
     for ell in ells:
         contrib = P * _LEGENDRE[ell](mu) * herm
@@ -199,17 +188,23 @@ def shell_average(values_k, box: Box):
 
 
 def gaussian_se(pk_grid, box: Box):
-    """Standard error of the shell-mean power of ONE Gaussian realization with per-mode
-    expectation `pk_grid`: each independent (half-grid) mode's |delta_k|^2 has variance
-    P^2, so `SE = sqrt(sum P_i^2) / n_indep` over the half-grid modes of the shell. The
-    Hermitian-weighted mean has the same variance (weights cancel; conjugates are
-    identical, not independent)."""
+    """Standard error of the shell-mean power (the Hermitian-weighted mean) of ONE
+    Gaussian realization with per-mode expectation `pk_grid`:
+
+        SE = sqrt(2 sum_c w_c P_c^2) / sum_c w_c        over the shell's half-grid cells
+
+    with `w` the Hermitian weights. Exact: an interior cell stands for itself and its
+    conjugate (Var |delta|^2 = P^2, weight 2); a kz = 0 or Nyquist plane cell and its
+    conjugate are both on the half grid and equal (weight 1 each); a self-conjugate
+    mode is real (Var |delta|^2 = 2 P^2, weight 1). Every case gives `2 w P^2`, so a
+    shell holds `nmodes / 2` independent modes."""
     k_mag, idx, nb = _shell_index(box)
+    herm = np.broadcast_to(hermitian_weights(box), k_mag.shape).ravel()
     P2 = (np.asarray(pk_grid, dtype=np.float64) ** 2).ravel()
-    n_indep = np.bincount(idx, minlength=nb + 1)[:nb]
-    s2 = np.bincount(idx, weights=P2, minlength=nb + 1)[:nb]
+    wsum = np.bincount(idx, weights=herm, minlength=nb + 1)[:nb]
+    s2 = np.bincount(idx, weights=2.0 * herm * P2, minlength=nb + 1)[:nb]
     with np.errstate(invalid="ignore", divide="ignore"):
-        return np.sqrt(s2) / n_indep
+        return np.sqrt(s2) / wsum
 
 
 def kaiser_boost(ell: int, beta: float) -> float:

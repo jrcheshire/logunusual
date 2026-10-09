@@ -1,42 +1,30 @@
 """The default bin table, seed schedule and constants (dependency-free).
 
-A run is a list of `Bin`s (`config.RunConfig`); this module holds the default list:
-the seven-bin design of the SPHEREx v28 forecast (z = 0-2.2 partitioned into shells,
-one periodic box per shell centred on the observer), with the seed schedule and the
-radial buffer that went with it. Any other table with the same fields can be given in
-a run config instead.
-
-Provenance of the numbers (all copied verbatim from `generate_config.py`,
-2026-09-04):
-
-- `z_eff`, `rmin`, `rmax`: shell edges in comoving Mpc/h from
-  FlatLambdaCDM(H0=67.36, Om0=0.3153), the cosmology of the CAMB matter-power TSVs.
-- `nbar`: sum over the five sigma_z/(1+z) < 0.2 bins of the v28 forecast density
-  (`galaxy_density_v28_base_cbe.txt`); `b`: numdens-weighted mean v28 bias.
-- `L_box`: fits `2 * (rmax + RADIAL_BUFFER)`; `N_grid`: keeps the cell 8-16 Mpc/h.
-- `f`: the exact linear growth rate `dln D / dln a` of the distance cosmology's
-  flat-LCDM background, `fnl.growth_rate_md(z_eff, OMEGA_M_DISTANCE)` (2026-10-01,
-  ROADMAP M5), stored as literals so this module needs no numerics; a test
-  recomputes them.
+`BIN_SUITE_V28` is the seven-bin design of the SPHEREx v28 forecast: z = 0-2.2 split
+into shells, one observer-centred periodic box per shell; a run config can give any
+other table with the same fields. `rmin`, `rmax`: comoving edges (Mpc/h) in
+FlatLambdaCDM(H0=67.36, Om0=0.3153), the cosmology of the CAMB P(k) tables. `nbar`:
+forecast density summed over the five sigma_z/(1+z) < 0.2 samples; `b`: their
+number-weighted mean bias. `L_box` holds `2 (rmax + RADIAL_BUFFER)`; cells are
+~8-16 Mpc/h. `f`: `fnl.growth_rate_md(z_eff, OMEGA_M_DISTANCE)`, stored as literals.
 """
 
 from dataclasses import dataclass
 
-#: `seed = SEED_BASE + realization * 1000 + bin_index` (run_bin_suite.py default).
+#: `seed = SEED_BASE + realization * 1000 + bin_index` (`seed_for`).
 SEED_BASE = 137_000_000
 SEED_REALIZATION_STRIDE = 1000
 
-#: Buffer (Mpc/h) added on both sides of each shell when the box is drawn. The boxes
-#: were sized for 150; 160 (M5) covers the displacement tail of the 100-realization
-#: ensemble and leaves >= 12 Mpc/h of box room in every bin.
+#: Buffer (Mpc/h) on both sides of each shell: covers `shell.Shell.required_buffer`
+#: over 100 default realizations, leaving >= 12 Mpc/h of box room in every bin.
 RADIAL_BUFFER = 160.0
 
 #: Distance cosmology behind rmin/rmax and the matter-power tables.
 H0_DISTANCE = 67.36
 OMEGA_M_DISTANCE = 0.3153
 
-#: Primordial normalisation the matter-power tables were made with (CAMB, Planck 2018:
-#: `make_matter_power.py`); `fnl.LocalPNG` needs it to recover M(k) from a table.
+#: Primordial normalisation of the CAMB tables (Planck 2018); `fnl.LocalPNG` needs it
+#: to recover M(k) from a table.
 PRIMORDIAL_AS = 2.1e-9
 PRIMORDIAL_NS = 0.9649
 PRIMORDIAL_K_PIVOT = 0.05 / (H0_DISTANCE / 100.0)  # CAMB's 0.05 / Mpc, in h/Mpc
@@ -65,8 +53,7 @@ class Bin:
     b: float
     f: float  # linear growth rate at z_eff (see module docstring)
     pk_file: str = ""  # input P(k) TSV name (relative to the run's pk_dir)
-    # nonlinear galaxy-target table (same dir); empty = `pk_file`, which stays the
-    # linear table behind the matter field, the velocities and M(k)
+    # nonlinear galaxy-target table; empty = `pk_file` (always the linear table)
     pk_galaxy_file: str = ""
 
     def __post_init__(self):
@@ -95,7 +82,7 @@ class Bin:
 
     @property
     def matterpower_file(self) -> str:
-        """`data/<pk_file>`: where the M1 scripts expect the TSV in a checkout."""
+        """`data/<pk_file>`: the scripts' default TSV path in a checkout."""
         return f"data/{self.pk_file}"
 
 
@@ -127,11 +114,8 @@ BIN_SUITE_V28 = tuple(Bin(*row, f=_F_FLAT_LCDM[row[4]]) for row in _ROWS)
 
 
 def seed_for(realization: int, bin_index: int, base: int = SEED_BASE) -> int:
-    """The prod_v2 seed schedule: `base + realization * 1000 + bin_index`.
-
-    The stride-1000 layout is what keeps realizations from colliding; both
-    arguments are bounded so a collision cannot happen silently.
-    """
+    """`base + realization * 1000 + bin_index`; both arguments are bounded by the
+    stride so two (realization, bin) pairs never share a seed."""
     if not 0 <= realization < SEED_REALIZATION_STRIDE:
         raise ValueError(
             f"realization must be in [0, {SEED_REALIZATION_STRIDE}), got {realization}"

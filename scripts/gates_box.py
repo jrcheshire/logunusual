@@ -1,9 +1,12 @@
-"""Run the M1 statistical gates with full tables and write `runs/m1_gates/<stamp>.json`.
+"""Periodic-box statistical checks with per-band tables; writes
+`runs/gates_box/<stamp>_n<N>.json`.
 
-    pixi run python scripts/m1_gates.py [--n 128] [--L 1000] [--seeds 48] [--nbar 3e-3]
+    pixi run python scripts/gates_box.py [--n 128] [--L 1000] [--seeds 32]
+        [--seeds-shot 64] [--band-seeds 32] [--nbar 3e-3]
 
-The same functions back `tests/test_gates_m1.py`; this script exists to run bigger
-configurations and keep the numbers (the JSON is gitignored; quote them in the PR).
+The same `gates` functions back `tests/test_gates_box.py`, and the defaults are the
+test's settings; this script runs other configurations and keeps every number. Bars
+and their derivation: `docs/validation.md`.
 """
 
 import argparse
@@ -38,14 +41,18 @@ def main():
     ap.add_argument("--n", type=int, default=128)
     ap.add_argument("--L", type=float, default=1000.0)
     ap.add_argument("--est-factor", type=int, default=2)
-    ap.add_argument("--seeds", type=int, default=48)
+    ap.add_argument(
+        "--seeds", type=int, default=32, help="catalog and Kaiser-limit realizations"
+    )
+    ap.add_argument(
+        "--seeds-shot", type=int, default=64, help="uniform-field shot-noise draws"
+    )
     ap.add_argument(
         "--band-seeds",
         type=int,
-        default=None,
-        help="seed count the BANDS are designed for (default: --seeds); more seeds "
-        "than this through the same bands is how a super-Gaussian scatter clears "
-        "the SE floor",
+        default=32,
+        help="seed count the shot-noise BANDS are designed for; more draws than this "
+        "through the same bands is how a super-Gaussian scatter clears the SE floor",
     )
     ap.add_argument("--seeds-field", type=int, default=192)
     ap.add_argument("--nbar", type=float, default=3e-3)
@@ -53,7 +60,7 @@ def main():
         "--bin", type=int, default=5, help="v28 bin whose b, f, TSV are used"
     )
     ap.add_argument("--pk", default=None, help="TSV path (default: the bin's file)")
-    ap.add_argument("--out", default="runs/m1_gates")
+    ap.add_argument("--out", default="runs/gates_box")
     args = ap.parse_args()
 
     b = suite.BIN_SUITE_V28[args.bin - 1]
@@ -77,49 +84,49 @@ def main():
     r = gates.gate_field_identity(
         spectrum, b.b, box, range(3000, 3000 + args.seeds_field)
     )
-    report("G3 galaxy grid identity", r["galaxy"])
-    report("G3 matter grid identity", r["matter"])
-    out["G3"] = {k: v.as_dict() for k, v in r.items()}
-    print(f"[G3 {time.perf_counter() - t:.0f} s]")
+    report("galaxy grid identity", r["galaxy"])
+    report("matter grid identity", r["matter"])
+    out["grid_identity"] = {k: v.as_dict() for k, v in r.items()}
+    print(f"[grid identity {time.perf_counter() - t:.0f} s]")
 
     t = time.perf_counter()
     e = gates.gate_uniform_shot(
         box,
         box_est,
         args.nbar,
-        range(4000, 4000 + args.seeds),
+        range(4000, 4000 + args.seeds_shot),
         band_seeds=args.band_seeds,
     )
-    report("G4a uniform shot vs Jing", e)
-    out["G4a"] = e.as_dict()
+    report("uniform-field shot noise vs Jing", e)
+    out["uniform_shot"] = e.as_dict()
     F = field.generate_fields(spectrum, b.b, box, 4100, rsd=False)
     r = gates.gate_fixed_field_sampler(F, args.nbar, range(4200, 4200 + 16), box_est)
-    report("G4b fixed field, first zone", r["first_zone"])
-    report("G4b fixed field, to estimator Nyquist", r["to_estimator_nyquist"])
-    out["G4b"] = {k: v.as_dict() for k, v in r.items()}
-    print(f"[G4 {time.perf_counter() - t:.0f} s]")
+    report("fixed-field sampler, first zone", r["first_zone"])
+    report("fixed-field sampler, to estimator Nyquist", r["to_estimator_nyquist"])
+    out["fixed_field_sampler"] = {k: v.as_dict() for k, v in r.items()}
+    print(f"[shot noise and sampler {time.perf_counter() - t:.0f} s]")
 
     t = time.perf_counter()
     r = gates.gate_catalog(
         spectrum, b.b, b.f, box, box_est, args.nbar, range(5000, 5000 + args.seeds)
     )
-    report("G5 monopole vs b^2 P_in x estimator response", r["monopole"])
-    report("G5 monopole vs fixed-field prediction", r["monopole_fixed_field"])
-    report("G6 premise P_gm/(b P_mm) (measurement)", r["premise"])
+    report("monopole vs b^2 P_in x estimator response", r["monopole"])
+    report("monopole vs fixed-field prediction", r["monopole_fixed_field"])
+    report("RSD premise P_gm/(b P_mm) (measurement)", r["premise"])
     print(f"  f Psi_rms = {r['f_psi_rms']:.2f} Mpc/h")
-    report("G6 P2/P0 over Kaiser, all bands (measurement)", r["kaiser_all_bands"])
-    report("G6 P2/P0 over Kaiser, lowest band (gated)", r["kaiser_lowest_band"])
+    report("RSD P2/P0 over Kaiser, all bands (measurement)", r["kaiser_all_bands"])
+    report("RSD P2/P0 over Kaiser, lowest band (gated)", r["kaiser_lowest_band"])
     report(
-        "G6 P2 over generalised prediction (measurement)", r["quadrupole_generalised"]
+        "RSD P2 over generalised prediction (measurement)", r["quadrupole_generalised"]
     )
     report(
-        "G6 P0_s over generalised prediction (measurement)", r["monopole_generalised"]
+        "RSD P0_s over generalised prediction (measurement)", r["monopole_generalised"]
     )
-    print("\nG7 density", r["density"])
-    out["G5_G6_G7"] = {
+    print("\ndensity", r["density"])
+    out["catalog"] = {
         k: (v.as_dict() if isinstance(v, gates.Ensemble) else v) for k, v in r.items()
     }
-    print(f"[G5-7 {time.perf_counter() - t:.0f} s]")
+    print(f"[catalog {time.perf_counter() - t:.0f} s]")
 
     t = time.perf_counter()
     e = gates.gate_kaiser_linear_limit(
@@ -131,9 +138,9 @@ def main():
         0.1,
         range(6000, 6000 + args.seeds),
     )
-    report("G6 linear limit (P_in x 1e-2): P2/P0 over Kaiser", e)
-    out["G6_linear_limit"] = e.as_dict()
-    print(f"[G6 linear limit {time.perf_counter() - t:.0f} s]")
+    report("Kaiser linear limit (P_in x 1e-2): P2/P0 over Kaiser", e)
+    out["kaiser_linear_limit"] = e.as_dict()
+    print(f"[Kaiser linear limit {time.perf_counter() - t:.0f} s]")
 
     Path(args.out).mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y-%m-%dT%H%M%S")

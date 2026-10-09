@@ -1,17 +1,12 @@
 """Observer-centred shell product: geometry, cell-level radial window, angular mask,
 radial RSD, and the streamed shell sampler (numpy).
 
-Frame: the periodic box is centred on the observer, so a position from
-`sample.place_chunked` (in `[0, L)`) is shifted by `-L/2` per axis and cell centres sit
-at `(i + 0.5) dx - L/2`. Galaxies are drawn only in cells whose centre lies in the
-buffered shell `[max(0, rmin - buffer), rmax + buffer]` (full sky; the window
-multiplies the intensity at cell level, the lognormal field itself stays periodic and
-unwindowed), displaced radially by their OWN cell's displacement,
-`s = x + f (Psi . x / r^2) x`, then kept if `rmin <= |s| <= rmax` (inclusive) and, with
-a mask, if the HEALPix pixel of `s` is set. No periodic wrap after the shift: a galaxy
-can only leave the box from a buffer cell touching a face, and it is outside
-`[rmin, rmax]` either way. The buffer is what lets galaxies cross the shell edges in
-both directions under RSD without a density deficit at the edge.
+The box is centred on the observer: positions in `[0, L)` are shifted by `-L/2`, cell
+centres sit at `(i + 0.5) dx - L/2`. Galaxies are drawn in cells whose centre lies in
+`[max(0, rmin - buffer), rmax + buffer]` (the field stays periodic), displaced by their
+OWN cell's `s = x + f (Psi . x / r^2) x`, and kept iff `rmin <= |s| <= rmax`
+(inclusive) and the mask pixel of `s` is set; no wrap after the shift. Entry point:
+`sample_shell`.
 """
 
 from dataclasses import dataclass
@@ -52,11 +47,9 @@ class Shell:
 
     def required_buffer(self, box: Box, f: float, psi_flat=None) -> float:
         """The smallest buffer that draws every cell able to feed the shell, for this
-        field. A galaxy at `x` in cell `c` lands at `|s| = | |x| + f Psi_c . x_hat |`;
-        `reach_interval` bounds that over the cell, and a cell can feed the shell iff
-        the bound meets `[rmin, rmax]`. Returns the largest distance from the shell of
-        any such cell, over the whole box; `psi_flat` None means no RSD. Checked at
-        field time by `sample_shell`."""
+        field: the largest distance from the shell of any cell in the box whose signed
+        line-of-sight reach (`reach_interval`) meets `[rmin, rmax]`. `psi_flat` None
+        means no RSD. `sample_shell` raises if the buffer is below it."""
         n = box.n_mesh
         need = 0.0
         for i in range(n):
@@ -73,9 +66,8 @@ class Shell:
         return need
 
     def check_box(self, box: Box):
-        """The buffered shell must fit inside the box centred on the observer, and
-        the buffer must exceed a cell diagonal (so every cell that can feed the shell
-        under RSD is drawn)."""
+        """Raise unless the buffered shell fits inside the box centred on the observer
+        and the buffer is at least a cell diagonal."""
         if self.r_hi > 0.5 * box.box_size + 1e-9:
             raise ValueError(
                 f"buffered shell radius {self.r_hi} exceeds L/2 = {0.5 * box.box_size}"
@@ -123,13 +115,13 @@ def slab_radius(box: Box, i: int):
 
 
 def reach_interval(box: Box, i: int, f: float, psi_slab=None):
-    """Bounds `(s_lo, s_hi)`, each shape (N*N,), on the redshift-space radius
-    `|s| = | |x| + f Psi_c . x_hat |` of any point `x` of the cells of x-slab `i`
-    (`psi_slab` the slab's `(N*N, 3)` rows of `psi_flat`; None means no RSD). `x` lies
-    within `h = sqrt(3)/2 dx` of the centre `c`, so `|x|` is in `[max(r_c - h, 0),
-    r_c + h]` and `x_hat` within the chord `chi = 2 sin(theta/2)`, `sin theta = h/r_c`,
-    of `c_hat` (`chi = 2` for `r_c <= h`); the line-of-sight shift is then in
-    `f Psi_c . c_hat +- |f| |Psi_c| chi`, clipped to `+- |f| |Psi_c|`."""
+    """Bounds `(s_lo, s_hi)`, each (N*N,), on the redshift-space radius
+    `|s| = | |x| + f Psi_c . x_hat |` over the cells of x-slab `i` (`psi_slab`: the
+    slab's `(N*N, 3)` rows of `psi_flat`; None = no RSD). With `h = sqrt(3)/2 dx`,
+    `|x|` is in `[max(r_c - h, 0), r_c + h]` and `x_hat` within the chord
+    `chi = 2 sin(theta/2)`, `sin theta = h/r_c`, of `c_hat` (`chi = 2` if `r_c <= h`),
+    so the signed shift is in `f Psi_c . c_hat +- |f| |Psi_c| chi`, clipped to
+    `+- |f| |Psi_c|`."""
     h = 0.5 * np.sqrt(3.0) * box.dx
     n = box.n_mesh
     r = slab_radius(box, i).reshape(-1)
@@ -161,15 +153,12 @@ def reach_interval(box: Box, i: int, f: float, psi_slab=None):
 
 
 def slab_window(box: Box, shell: Shell, mask, i: int, angular: bool = True):
-    """Boolean (N, N): the cells of x-slab `i` to draw. Radial: centre within the
-    buffered shell. Angular (with a mask and `angular`): radial RSD keeps a galaxy's
-    direction, so a galaxy of cell `c` stays within `cell_angular_radius(r_c)` of the
-    cell-centre direction and its pixel's centre within a further pixel radius of
-    that; the cell is dropped iff the nearest set-pixel centre is farther than
-    `cell_angular_radius(r_c) + 2 max_pixrad` from its centre's pixel centre
-    (`AngularMask.distance_to_set`). An exact superset of the cells that feed the
-    masked shell; `tests/test_shell.py` checks it galaxy by galaxy. Returns
-    `(window, n_radial)` with `n_radial` the radial-only cell count."""
+    """`(window, n_radial)`: boolean (N, N) cells of x-slab `i` to draw, and the
+    radial-only cell count. Radial: centre within the buffered shell. Angular pre-cut
+    (with a mask and `angular`): radial RSD keeps a galaxy's direction, so a cell is
+    dropped iff the nearest set-pixel centre is farther than
+    `cell_angular_radius(r_c) + 2 max_pixrad` from its centre's pixel centre -- an
+    exact superset of the cells that feed the masked shell."""
     import healpy as hp
 
     r = slab_radius(box, i)
@@ -332,7 +321,7 @@ class ShellStats:
     ic_seed: int = 0
     draw_seed: int = 0
     f: float = 0.0
-    psi_max: float = 0.0  # max |Psi| over the drawn (window) cells, Mpc/h
+    psi_max: float = 0.0  # max |Psi| over the radial-window cells, Mpc/h
     required_buffer: float = 0.0  # Shell.required_buffer for this field (exact), Mpc/h
 
     def realized_nbar(self, fsky: float) -> float:
@@ -340,8 +329,7 @@ class ShellStats:
 
 
 def _max_psi_in_window(psi_flat, box: Box, shell: Shell) -> float:
-    """`max |Psi|` over the cells of the radial window, slab by slab (no full-grid
-    temporary)."""
+    """`max |Psi|` over the cells of the radial window, slab by slab."""
     n = box.n_mesh
     best = 0.0
     for i in range(n):
@@ -354,9 +342,8 @@ def _max_psi_in_window(psi_flat, box: Box, shell: Shell) -> float:
 
 
 def radial_histogram(r, edges):
-    """Counts of `r` per bin of the UNIFORM `edges` (as `np.histogram(r, edges)`,
-    including its edge corrections; values at `edges[-1]` fall in the last bin) via
-    `bincount`, without the sort `np.histogram` does."""
+    """`np.histogram(r, edges)[0]` for UNIFORM `edges` (same edge handling; values at
+    `edges[-1]` fall in the last bin), via `bincount` without the sort."""
     nb = edges.size - 1
     lo, hi = edges[0], edges[-1]
     idx = ((r - lo) * (nb / (hi - lo))).astype(np.int64)
@@ -401,13 +388,12 @@ def sample_shell(
     n_radial_bins: int = 8,
     angular_precut: bool = True,
 ):
-    """Generator over x-slabs of the box: yields `(xyz_kept, stats)` with `stats` the
-    running `ShellStats` (the same object each time; final after exhaustion). Positions
-    are observer-centred, in redshift space if `rsd`. Each slab is drawn on its own
-    stream (`sample.slab_rng`) by `n_workers` threads (default: the core count) and
-    the slabs are yielded in order, so the catalog is the same for any thread count.
-    Each worker builds its own slab's window (radial, and the angular pre-cut with a
-    mask); `n_window_cells` / `lam_window` are complete only after exhaustion."""
+    """Generator over x-slabs: yields `(xyz_kept, stats)`, `stats` the running
+    `ShellStats` (one object, final after exhaustion). Positions are observer-centred,
+    in redshift space if `rsd`. Slabs are drawn on their own streams by `n_workers`
+    threads (default: the core count) and yielded in order, so the catalog is bitwise
+    the same for any thread count. Raises if the buffer is below
+    `Shell.required_buffer` for this field."""
     box = fields.box
     shell.check_box(box)
     lam, clip, _ = sample.intensity(fields.delta_g, nbar, box)

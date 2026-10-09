@@ -1,18 +1,19 @@
-"""M5 ensemble readout: gates E1 and E2 over a run's `summary.json` files (ROADMAP M5).
+"""Integrity and density checks over an ensemble's `summary.json` files.
 
-    pixi run python scripts/m5_ensemble.py RUN_DIR [--manifest PATH] [--n 100]
-        [--out runs/m5/ensemble.json]
+    pixi run python scripts/ensemble_check.py RUN_DIR [--manifest PATH] [--n 100]
+        [--out runs/ensemble/ensemble_check.json]
 
 RUN_DIR holds `realization_NNNNN/summary.json` (the catalogs need not be present);
 `--manifest` is the job's `sha256sum` manifest, which gets one line per realization
 whose catalog passed `logunusual check`.
 
-E1: realizations 0..n-1 all present, one config hash, every per-bin seed (and ic /
-draw seed) distinct, the manifest lists exactly those n catalogs. E2: per bin, the
-ensemble mean of `realized_over_target` against `1 + edge`, with SE from the scatter
-over realizations; `edge = 3 sigma_s^2 (rmax - rmin) / (rmax^3 - rmin^3)` is the
-second-order excess from the radial RSD shift across a curved shell (sigma_s = f
-times the rms of one displacement component). |z| <= 3 passes.
+Integrity: realizations 0..n-1 all present and no others, one config hash, every
+per-bin seed (and ic / draw seed) distinct, the manifest lists exactly those n
+catalogs. Density: per bin, the ensemble mean of `realized_over_target` against
+`1 + edge`, SE from the scatter over realizations; `edge = 3 sigma_s^2 (rmax - rmin) /
+(rmax^3 - rmin^3)` is the second-order excess from the radial RSD shift across a
+curved shell (sigma_s = f times the rms of one displacement component). |z| <= 3
+passes. Exits 0 only if both pass; bars in `docs/validation.md`.
 """
 
 import argparse
@@ -43,7 +44,7 @@ def main():
     ap.add_argument("run_dir")
     ap.add_argument("--manifest", default=None)
     ap.add_argument("--n", type=int, default=100)
-    ap.add_argument("--out", default="runs/m5/ensemble.json")
+    ap.add_argument("--out", default="runs/ensemble/ensemble_check.json")
     args = ap.parse_args()
 
     by_r = load(Path(args.run_dir))
@@ -69,17 +70,17 @@ def main():
             f" {manifest_ok}"
         )
 
-    e1 = not missing and not extra and len(hashes) == 1 and seeds_ok
-    e1 = e1 and manifest_ok is not False
+    integrity_ok = not missing and not extra and len(hashes) == 1 and seeds_ok
+    integrity_ok = integrity_ok and manifest_ok is not False
     print(
         f"realizations: {len(by_r)} found, missing {missing or 'none'}, "
         f"extra {extra or 'none'}"
     )
     print(f"config hashes: {sorted(h[:12] for h in hashes)}")
     print(f"seeds distinct over {n_bins_total} bin-realizations: {seeds_ok}")
-    print(f"E1: {'PASS' if e1 else 'FAIL'}")
+    print(f"integrity: {'PASS' if integrity_ok else 'FAIL'}")
 
-    rows, e2 = [], True
+    rows, density_ok = [], True
     print(
         f"\n{'bin':>3} {'N mean':>13} {'N sd':>10} {'ratio mean':>11} {'SE':>8} "
         f"{'edge':>8} {'z':>6} {'psi_max':>8} {'req/buf':>8} {'clipped':>9}"
@@ -91,7 +92,7 @@ def main():
         se = ratio.std(ddof=1) / math.sqrt(len(ratio))
         edge = float(np.mean([edge_excess(b) for b in bs]))
         z = float((ratio.mean() - 1.0 - edge) / se)
-        e2 = e2 and bool(abs(z) <= 3.0)
+        density_ok = density_ok and bool(abs(z) <= 3.0)
         req = max(b["required_buffer"] / b["radial_buffer"] for b in bs)
         row = dict(
             index=idx,
@@ -112,7 +113,7 @@ def main():
             f"{row['ratio_mean']:>11.5f} {se:>8.5f} {edge:>8.1e} {z:>6.2f} "
             f"{row['psi_max']:>8.1f} {req:>8.3f} {row['clipped_power_fraction']:>9.1e}"
         )
-    print(f"E2: {'PASS' if e2 else 'FAIL'}")
+    print(f"density: {'PASS' if density_ok else 'FAIL'}")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -126,15 +127,15 @@ def main():
                 config_hashes=sorted(hashes),
                 seeds_distinct=seeds_ok,
                 manifest_ok=manifest_ok,
-                e1=e1,
-                e2=e2,
+                integrity_ok=integrity_ok,
+                density_ok=density_ok,
                 bins=rows,
             ),
             indent=1,
         )
     )
     print(f"\nwrote {out}")
-    raise SystemExit(0 if e1 and e2 else 1)
+    raise SystemExit(0 if integrity_ok and density_ok else 1)
 
 
 if __name__ == "__main__":
