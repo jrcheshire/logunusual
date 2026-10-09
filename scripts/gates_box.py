@@ -1,9 +1,10 @@
-"""Run the M1 statistical gates with full tables and write `runs/gates_box/<stamp>.json`.
+"""Periodic-box statistical checks with per-band tables; writes
+`runs/gates_box/<stamp>_n<N>.json`.
 
     pixi run python scripts/gates_box.py [--n 128] [--L 1000] [--seeds 48] [--nbar 3e-3]
 
-The same functions back `tests/test_gates_box.py`; this script exists to run bigger
-configurations and keep the numbers (the JSON is gitignored; quote them in the PR).
+The same `gates` functions back `tests/test_gates_box.py`; this script runs other
+configurations and keeps every number. Bars and their derivation: `docs/validation.md`.
 """
 
 import argparse

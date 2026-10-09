@@ -1,13 +1,10 @@
-"""The statistical gates (M1: periodic box; M2: shell product), as functions returning
-plain dicts so that the slow tests and `scripts/gates_{box,shell}.py` run the same code.
+"""Statistical checks of the periodic box and the shell product, as functions returning
+plain dicts, shared by the slow tests and `scripts/gates_{box,shell}.py`.
 
-Discipline (umbrella memory): the statistic is formed PER REALIZATION and then averaged;
-the standard error is the scatter across realizations (never a Gaussian formula on a
-lognormal quantity); every gate uses its own seed range; bands are built from the
-tolerance and the seed count (`n_min_indep`), not picked.
-
-Conventions: the generator lives on `box`; catalogs are measured on `box_est` (mesh
-2x by default) so the estimator's own aliasing stays out of the generator's first zone.
+Each statistic is formed per realization, then averaged; the SE is the scatter across
+realizations (never a Gaussian formula on a lognormal quantity); bands come from the
+tolerance and seed count (`n_min_indep`). The generator lives on `box`; catalogs are
+measured on `box_est` (typically 2x mesh). Bars and usage: `docs/validation.md`.
 """
 
 from dataclasses import dataclass, field as dc_field
@@ -18,7 +15,7 @@ from . import field, fnl as _fnl, sample, shell, validate
 from .grid import Box, sinc_window
 from .pk import pk_on_grid
 
-TOL = 0.02  # the ROADMAP resolution: SE must be <= TOL / 3 in every gated band
+TOL = 0.02  # resolution: SE must be <= TOL / 3 in every gated band
 Z_MAX = 4.0  # per-band |z| bound; P(|z| > 4) = 6e-5 per band under the null
 
 
@@ -91,7 +88,7 @@ def ensemble(k, ratios, *, target=1.0, tol=TOL, require_se=True, extra=None):
     return Ensemble(np.asarray(k), n, mean, se, z, se_ok, passed, extra or {})
 
 
-# --------------------------------------------------------------------------- G3
+# ------------------------------------------------------------------ grid identity
 
 
 def gate_field_identity(
@@ -99,8 +96,7 @@ def gate_field_identity(
 ):
     """<P(delta_g)> / target = 1 on every band up to the Nyquist (grid identity); the
     matter field likewise. `target` is the deconvolved grid target the field was built
-    for (`b(k)^2 P` with `fnl`, an `fnl.LocalPNG`; `P` from `galaxy_table` when given,
-    G15)."""
+    for (`b(k)^2 P` with `fnl`, an `fnl.LocalPNG`; `P` from `galaxy_table` if given)."""
     tg = validate.shell_average(
         field.target_on_grid(
             _fnl.galaxy_spectrum(spectrum, b, fnl, galaxy_table), box, jitter_p
@@ -135,7 +131,7 @@ def gate_field_identity(
     return {"galaxy": ensemble(kb, rg, extra=extra), "matter": ensemble(kb, rm)}
 
 
-# --------------------------------------------------------------------------- G4
+# ------------------------------------------------- shot noise and fixed-field sampler
 
 
 def gate_uniform_shot(
@@ -144,14 +140,9 @@ def gate_uniform_shot(
     """A constant intensity sampled and placed like a real catalog has, after CIC
     deconvolution on the estimator mesh, exactly the Jing (2005) shot spectrum.
 
-    `band_seeds` (default `len(seeds)`) is the seed count the BANDS are designed for,
-    the same split `gate_catalog` uses. Bands hold enough modes for a GAUSSIAN scatter
-    to meet the SE floor at that count, which leaves the floor met exactly and no
-    margin; the scatter of a Poisson-sampled ratio is super-Gaussian, so the lowest
-    band sits over it. Re-deriving the bands from a larger seed count does not help --
-    the seed count cancels, and the worst band's Gaussian SE is 0.576% at 32 seeds and
-    0.643% at 128 against the 0.667% floor. Running more seeds through FIXED bands is
-    what brings the measured scatter down."""
+    `band_seeds` (default `len(seeds)`): the seed count the bands are designed for, as
+    in `gate_catalog`; the super-Gaussian scatter needs more seeds than that through
+    the same bands (bands derived from more seeds do not help: the count cancels)."""
     shot = validate.shot_noise_k(box_est, nbar)
     pred = validate.shell_average(shot, box_est)
     edges = band_edges(box_est, box.k_nyq, n_min_indep(band_seeds or len(seeds)))
@@ -186,12 +177,9 @@ def catalog_power_prediction(
 ):
     """Exact per-mode expectation of the DECONVOLVED, shot-free mesh power measured by
     `validate.delta_k_from_positions` on `box_est` for a FIXED grid field: the grid
-    power (periodic in k, the image mapping) times `validate.effective_window` (the
-    coherent alias sum of CIC window x jitter window) over the CIC deconvolution. With
-    `delta_grid_b` the cross power is predicted instead. Exact for real-space catalogs;
-    for redshift-space catalogs the per-cell displacements break the lattice
-    periodicity, so the coherent sum is an approximation there (its departure from 1 is
-    < 0.3% below half the generator Nyquist on a 2x mesh)."""
+    power (periodic in k) times `validate.effective_window` over the CIC deconvolution;
+    with `delta_grid_b`, the cross power. Exact in real space; in redshift space the
+    per-cell displacements break the lattice periodicity, so it is approximate."""
     n = box.n_mesh
     a = np.fft.fftn(np.asarray(delta_grid, dtype=np.float64))
     if delta_grid_b is None:
@@ -211,10 +199,10 @@ def catalog_power_prediction(
 
 
 def gate_fixed_field_sampler(fields, nbar, draw_seeds, box_est: Box, *, k_max=None):
-    """For ONE field, the draw-averaged catalog power (shot removed) over the exact
-    fixed-field prediction = 1: isolates placement + Poisson + estimator from cosmic
-    variance. Gated up to the generator Nyquist (default), reported to the estimator
-    Nyquist (the images)."""
+    """For ONE field, draw-averaged catalog power (shot removed) over the exact
+    fixed-field prediction = 1, isolating placement + Poisson + estimator from cosmic
+    variance. Gated to `k_max` (default the generator Nyquist), reported to the
+    estimator Nyquist (the images)."""
     box = fields.box
     k_max = box.k_nyq if k_max is None else k_max
     pred = catalog_power_prediction(fields.delta_g, box, box_est, fields.jitter_p)
@@ -240,7 +228,7 @@ def gate_fixed_field_sampler(fields, nbar, draw_seeds, box_est: Box, *, k_max=No
     }
 
 
-# ----------------------------------------------------------------------- G5/G6/G7
+# -------------------------------------------------------- catalog power, RSD, density
 
 
 def gate_catalog(
@@ -256,18 +244,14 @@ def gate_catalog(
     k_max=None,
     band_seeds=None,
 ):
-    """Real-space monopole against `b^2 P_in x estimator_response` (ensemble) and
-    against the fixed-field prediction; Poisson density check; redshift-space
-    MEASUREMENTS: P2/P0 over Kaiser(beta = f/b), the same over the generalised linear
-    prediction from the realization's own grid spectra, and the linear premise
-    P_gm / (b P_mm). Linear-theory RSD is a k -> 0 limit (its error is O((k f Psi)^2)
-    and the lognormal galaxy-matter correlation is below 1 at finite k), so the Kaiser
-    ratio is ASSERTED only in the lowest band; the linear-limit gate is
-    `gate_kaiser_linear_limit`. `band_seeds` (default `len(seeds)`) is the seed count
-    the bands are designed for: bands hold enough modes for a GAUSSIAN scatter to meet
-    the SE floor at that count, so running more seeds than `band_seeds` through the
-    same bands is how a super-Gaussian (lognormal) scatter is brought under the floor
-    without changing the bands (M2 G11 uses 64 seeds on the 32-seed bands of G5)."""
+    """Real-space monopole against `b^2 P_in x estimator_response` and against the
+    fixed-field prediction; Poisson density check; redshift-space MEASUREMENTS: P2/P0
+    over Kaiser(f/b), the same over the linear prediction from the realization's own
+    grid spectra, and the premise P_gm / (b P_mm). Linear RSD is a k -> 0 limit, so
+    Kaiser is asserted only in the lowest band (`gate_kaiser_linear_limit` is the exact
+    check). `band_seeds` (default `len(seeds)`): the seed count the bands are designed
+    for; more seeds through the same bands bring a super-Gaussian scatter under the SE
+    floor."""
     k_max = 0.5 * box.k_nyq if k_max is None else k_max
     n_band = n_min_indep(band_seeds or len(seeds))
     edges = band_edges(box_est, k_max, n_band)
@@ -290,10 +274,10 @@ def gate_catalog(
         psi_rms.append(F.diagnostics["psi_z_rms"])
         real = sample.sample_catalog(F, nbar, draw, f=f, rsd=False)
         red = sample.sample_catalog(F, nbar, draw, f=f, rsd=True)
-        # density (G7)
+        # density
         z_pois.append((real.n_galaxies - real.lam_total) / np.sqrt(real.lam_total))
         dens.append(real.lam_total / (nbar * box.volume))
-        # real-space monopole (G5)
+        # real-space monopole
         pr = validate.power_multipoles(
             validate.delta_k_from_positions(real.xyz, box_est), box_est, shot_k=shot
         )
@@ -303,7 +287,7 @@ def gate_catalog(
             catalog_power_prediction(F.delta_g, box, box_est, jitter_p), box_est
         )
         r_fixed.append(band_ratio(pr["k"], pr["P0"], pred_fix, pr["nmodes"], edges)[1])
-        # redshift space (G6)
+        # redshift space
         ps = validate.power_multipoles(
             validate.delta_k_from_positions(red.xyz, box_est), box_est, shot_k=shot
         )
@@ -370,7 +354,7 @@ def gate_catalog(
     }
 
 
-# ------------------------------------------------------------------ G6 linear limit
+# ---------------------------------------------------------------- Kaiser linear limit
 
 
 def gate_kaiser_linear_limit(
@@ -386,15 +370,12 @@ def gate_kaiser_linear_limit(
     jitter_p=1,
     k_max=None,
 ):
-    """Kaiser as an exact statement: with the input spectrum scaled by `eps` the
-    lognormal fields are Gaussian to O(eps), the galaxy-matter correlation is 1 to
-    O(eps), and the redshift-space mapping is linear to O((k f Psi_rms)^2); then
-    `P2 / P0 = kaiser_ratio(f / b)` on every band. The residual budget
-    `(k_max f Psi_rms)^2` is returned so the reader can see it is below the SE. A dense
-    catalog keeps the shot noise below the (small) signal. This is a CONSISTENCY gate
-    (|z| < Z_MAX, no SE floor): the quadrupole ratio's realization scatter is 2-4% here
-    and the exactness of the RSD path is carried by the deterministic tests in
-    `tests/test_sample.py` (own-cell displacement, plane-wave displacement)."""
+    """Kaiser as an exact statement: with the input spectrum scaled by `eps` the fields
+    are Gaussian and fully correlated to O(eps) and the RSD mapping is linear to
+    O((k f Psi_rms)^2), so `P2 / P0 = kaiser_ratio(f / b)` on every band; the residual
+    budget `(k_max f Psi_rms)^2` is returned. Use a dense catalog (shot noise below the
+    small signal). A consistency check (|z| < Z_MAX, no SE floor); the RSD path's
+    exactness is tested deterministically in `tests/test_sample.py`."""
     k_max = 0.5 * box.k_nyq if k_max is None else k_max
     scaled = lambda k: eps * spectrum(k)  # noqa: E731
     edges = band_edges(box_est, k_max, n_min_indep(len(seeds)))
@@ -424,7 +405,7 @@ def gate_kaiser_linear_limit(
     )
 
 
-# ------------------------------------------------------------------ M4: G14 f_NL
+# ---------------------------------------------------------------------- f_NL ratio
 
 
 def gate_fnl_ratio(
@@ -441,20 +422,13 @@ def gate_fnl_ratio(
     n_min=1,
 ):
     """Matched seeds: per realization, the real-space shot-subtracted monopole of the
-    catalog with `png` (an `fnl.LocalPNG`) over the one without, both from the SAME ic
-    and draw seeds, divided by the predicted `<b(k)^2 P R> / <b^2 P R>` (R the
-    estimator response, the band average mode-weighted as the measurement is). Target 1
-    on every band to `k_max` (default half the generator Nyquist).
-
-    A CONSISTENCY gate (|z| < Z_MAX, no SE floor): it checks that the run path hands
-    the catalog the injected b(k). The exact statement is the grid identity with the
-    b(k) target (`gate_field_identity(..., fnl=)`), and the sampler is linear in the
-    intensity (G4b, G5). Bands hold >= `n_min` independent modes (default 1: every
-    kf-shell its own band) so the k^-2 shape is seen. The lowest shells stay noisy
-    under matched seeds: at sigma^2 ~ 3 part of the low-k lognormal power is a white
-    term from the high-k modes, nearly the same in both arms but not scaling with the
-    shell's own amplitude, so the ratio does not cancel there (per-realization scatter
-    ~26% at k_f, 128^3, L 2000, f_NL = 100)."""
+    catalog with `png` (an `fnl.LocalPNG`) over the one without, from the SAME ic and
+    draw seeds, divided by the predicted `<b(k)^2 P R> / <b^2 P R>` (R the estimator
+    response, mode-weighted). Target 1 on every band to `k_max` (default half the
+    generator Nyquist); bands hold >= `n_min` independent modes (default 1: one
+    kf-shell each). A consistency check (|z| < Z_MAX, no SE floor) of the run path;
+    the exact statement is `gate_field_identity(..., fnl=)`. The lowest shells stay
+    noisy: their lognormal power includes a white term from high-k modes."""
     k_max = 0.5 * box.k_nyq if k_max is None else k_max
     edges = band_edges(box_est, k_max, n_min)
     shot = validate.shot_noise_k(box_est, nbar)
@@ -498,21 +472,18 @@ def gate_fnl_ratio(
     )
 
 
-# ------------------------------------------------------------------ M2: G10 shell
+# ------------------------------------------------------------------- shell density
 
 
 def gate_shell_density(
     spectrum, b, f, box: Box, sh: shell.Shell, mask, nbar, seeds, *, n_radial_bins=8
 ):
     """Shell product at production amplitude: over seeds, the mean of
-    `N_kept / (nbar fsky V_shell)` is 1, and so is the radial profile
-    `n(r) / nbar` in `n_radial_bins` sub-shells (the two edge sub-shells are where a
-    missing buffer or a wrong RSD crossing would show). The SE is the seed scatter,
-    which carries the field's own variance on the shell scale (sample variance, not
-    Poisson), so this is a CONSISTENCY gate: `|z| < Z_MAX`, no SE floor. Also returns
-    the Poisson z of the draws over the window against `sum(lambda)` (exact) and the
-    number of galaxies that left the box (a diagnostic: such a galaxy sits beyond
-    `rmax + buffer` and is never kept)."""
+    `N_kept / (nbar fsky V_shell)` is 1, and so is the radial profile `n(r) / nbar` in
+    `n_radial_bins` sub-shells (the edge sub-shells show a missing buffer or wrong RSD
+    crossing). The seed scatter carries sample variance, so this is a consistency check
+    (|z| < Z_MAX, no SE floor). Also returns the draws' Poisson z against
+    `sum(lambda)` and the count of galaxies that left the box (never kept)."""
     fsky = 1.0 if mask is None else mask.fsky
     edges = np.linspace(sh.rmin, sh.rmax, n_radial_bins + 1)
     v_sub = 4.0 / 3.0 * np.pi * np.diff(edges**3) * fsky

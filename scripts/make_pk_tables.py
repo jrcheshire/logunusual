@@ -4,12 +4,11 @@
     pixi run -e tables pk-tables make --model {linear,halofit} [--kh-max 10]
         [--npoints 12501] [--out-dir data] [--z 0.1 0.3 ...]
 
-Cosmology and CAMB call sequence are those of `make_matter_power.py`, which made the
-v28 tables (Planck 2018, `delta_tot`, log-spaced kh). `halofit` is Takahashi et al.
-2012 as CAMB implements it, including the Bird et al. 2012 massive-neutrino terms;
-CAMB leaves kh < `Min_kh_nonlinear` (0.005) linear.
+Planck 2018 cosmology, `delta_tot`, log-spaced kh: the v28 tables' CAMB call. `halofit`
+is Takahashi et al. 2012 as CAMB implements it, including the Bird et al. 2012
+massive-neutrino terms; CAMB leaves kh < `Min_kh_nonlinear` (0.005) linear.
 
-`check` (P1) regenerates the seven v28 linear tables (kh 1e-4 to 1, 10001 nodes) and
+`check` regenerates the seven v28 linear tables (kh 1e-4 to 1, 10001 nodes) and
 compares them byte for byte with `<pk-dir>/matterpower_camb_zeff=<z>.tsv`; on a
 mismatch it reports the maximum relative difference and exits 1. `make` writes
 `matterpower_camb_{lin,halofit}_kmax<kh-max>_zeff=<z>.tsv`. Runs in the `tables` env
@@ -27,7 +26,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from logunusual import suite  # noqa: E402
 
-# Planck 2018 TT,TE,EE+lowE+lensing best-fit, as in `make_matter_power.py`.
+# Planck 2018 TT,TE,EE+lowE+lensing best-fit, the v28 tables' cosmology.
 PLANCK18 = dict(
     H0=67.36,
     ombh2=0.02237,
@@ -72,7 +71,8 @@ def make_pk(z, model="linear", kh_min=1e-4, kh_max=1.0, npoints=10001, cosmo=PLA
 
 
 def tsv_bytes(kh, pk) -> bytes:
-    """The table format of `make_matter_power.py` (read by `pk.load_pk_tsv`)."""
+    """The v28 table format: tab-separated `kh Pk` rows under a `# kh Pk` header (read
+    by `pk.load_pk_tsv`)."""
     lines = ["# kh\tPk\n"] + [f"{k}\t{p}\n" for k, p in zip(kh, pk)]
     return "".join(lines).encode()
 

@@ -1,7 +1,7 @@
-"""M4 statistical gates (slow): the grid identity with the f_NL bias (G13), the
-matched-seed catalog ratio (G14), and the grid identity with a halofit galaxy target
-(G15). Boxes are ones whose target is attainable at the values used (`ROADMAP.md` M4:
-an f_NL or galaxy-table run that clips raises)."""
+"""Galaxy-target statistical checks (slow): the grid identity with the f_NL bias, the
+matched-seed catalog ratio at f_NL != 0, and the grid identity with a halofit galaxy
+target. Each box's target is attainable at the values used, since an f_NL or
+galaxy-table run that clips raises (`docs/construction.md`)."""
 
 import pytest
 
@@ -24,7 +24,7 @@ def _report(name, e):
 
 @pytest.mark.parametrize("f_nl, seed0", [(100.0, 8000), (-100.0, 8200)])
 def test_grid_identity_with_fnl_bias(spectrum, f_nl, seed0):
-    # G3's geometry and seed count (128^3, L 1000, 192 seeds); b(k_f)/b = 1.35 / 0.65
+    # the box grid identity's geometry and seed count; b(k_f)/b = 1.35 / 0.65
     box = Box(128, 1000.0)
     res = gates.gate_field_identity(
         spectrum, B5, box, range(seed0, seed0 + 192), fnl=LocalPNG(f_nl)
@@ -38,7 +38,7 @@ def test_grid_identity_with_fnl_bias(spectrum, f_nl, seed0):
 
 @pytest.mark.parametrize("f_nl, seed0", [(100.0, 8400), (-20.0, 8500)])
 def test_fnl_matched_seed_catalog_ratio(spectrum, f_nl, seed0):
-    # Consistency gate (|z| < 4, no SE floor), one band per kf-shell to k = 0.05.
+    # Consistency check (|z| < 4, no SE floor), one band per kf-shell to k = 0.05.
     # 128^3, L 2000 (dx 15.6, k_f 3.1e-3); b(k_f)/b = 2.30 / 0.74. f_NL = -50 and -100
     # clip here and would raise.
     box, box_est = Box(128, 2000.0), Box(256, 2000.0)
@@ -60,8 +60,8 @@ def test_fnl_matched_seed_catalog_ratio(spectrum, f_nl, seed0):
 
 
 def test_grid_identity_with_halofit_galaxy_target():
-    # G3's geometry and seed count (128^3, L 1000, 192 seeds), z = 0.9 kh-10 tables:
-    # galaxy b^2 P_halofit (sigma^2 5.45), matter P_lin (1.26); 0 clipped modes
+    # the box grid identity's geometry; z = 0.9 kh-10 tables, galaxy b^2 P_halofit
+    # (sigma^2 5.45), matter P_lin (1.26)
     lin = PowerSpectrum.from_tsv(DATA / "matterpower_camb_lin_kmax10_zeff=0.9.tsv")
     hf = PowerSpectrum.from_tsv(DATA / "matterpower_camb_halofit_kmax10_zeff=0.9.tsv")
     assert check_table_pair(lin, hf) == 0.0

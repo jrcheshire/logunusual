@@ -1,10 +1,13 @@
-"""Run the M2 statistical gates with full tables and write `runs/gates_shell/<stamp>.json`.
+"""Shell-product statistical checks with per-band tables; writes
+`runs/gates_shell/<stamp>_n<N>.json`.
 
-    pixi run python scripts/gates_shell.py [--n 128] [--L 1000] [--seeds 16] [--nbar 3e-3]
+    pixi run python scripts/gates_shell.py [--n 128] [--L 1000] [--seeds 16]
+        [--nbar 3e-3] [--shell RMIN RMAX BUFFER]
 
-The same functions back `tests/test_gates_shell.py`. The shell has bin 5's thickness
-scaled into the box, placed so a buffer satisfying the field-time bound fits under L/2
-(`--shell`); the mask is an equatorial band, fsky ~ 0.7.
+The same `gates` functions back `tests/test_gates_shell.py`. The shell has bin 5's
+thickness scaled into the box, placed so a buffer covering the field's requirement fits
+under L/2 (`--shell`); the mask is an equatorial band, fsky ~ 0.7. Bars:
+`docs/validation.md`.
 """
 
 import argparse
@@ -61,8 +64,8 @@ def main():
         nargs=3,
         default=(300.0, 371.1, 90.0),
         metavar=("RMIN", "RMAX", "BUFFER"),
-        help="shell in the gate box; the buffer must satisfy the field-time bound "
-        "sqrt(3)/2 dx + f max|Psi| (40-68 Mpc/h measured at 128^3, 2026-09-20)",
+        help="shell in the box; the buffer must cover the field's line-of-sight "
+        "requirement (the draw raises otherwise)",
     )
     ap.add_argument("--pk", default=None, help="TSV path (default: the bin's file)")
     ap.add_argument("--out", default="runs/gates_shell")

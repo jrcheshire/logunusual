@@ -1,15 +1,15 @@
 """Input power spectrum and the grid-native lognormal transform P -> P_G.
 
-The transform is done on the simulation grid itself (decided 2026-09-04):
+The transform runs on the simulation grid itself:
 
     xi(x)   = irfftn(P(k)) / V_cell          (P(0) := 0)
     xi_G(x) = log1p(xi(x))
-    P_G(k)  = rfftn(xi_G(x)) * V_cell,       P_G(0) := 0,  P_G < 0 -> 0 (recorded)
+    P_G(k)  = rfftn(xi_G(x)) * V_cell,       P_G(0) := 0,  P_G < 0 -> 0 (reported)
 
-For a periodic Gaussian field with grid spectrum P_G the field `exp(G)/<exp G> - 1` has
-grid two-point function exactly `exp(xi_G) - 1 = xi` in the ensemble (Coles & Jones
-1991), so its power equals `P` on every grid mode. Negative P_G means the target is not
-attainable by a lognormal (Xavier et al. 2016); the clip is reported, not hidden.
+For a periodic Gaussian field with grid spectrum P_G, `exp(G)/<exp G> - 1` has grid
+two-point function exactly `exp(xi_G) - 1 = xi` in the ensemble (Coles & Jones 1991),
+so its power is `P` on every grid mode. Negative P_G means the target is not attainable
+by a lognormal (Xavier et al. 2016).
 """
 
 from dataclasses import dataclass
@@ -85,13 +85,11 @@ class PowerSpectrum:
 
 def check_table_pair(linear: PowerSpectrum, galaxy: PowerSpectrum) -> float:
     """Check that a nonlinear galaxy-target table belongs with a bin's linear table;
-    returns `|P_gal / P_lin - 1|` at their common lowest node, raises otherwise.
-
-    Bound: `k0^2 sigma_v^2`, `sigma_v^2 = (1 / 6 pi^2) int P_lin dk` over the linear
-    table -- the leading low-k nonlinear correction (`P_13 -> -k^2 sigma_v^2 P_lin`),
-    so any nonlinear model of the same linear spectrum stays inside it at `k0`. A
-    table at another z or cosmology is off at order unity (17-35% between adjacent
-    v28 bins). Both tables must start at the same k."""
+    returns `|P_gal / P_lin - 1|` at their common lowest node (both must start at the
+    same k), raises if it exceeds `k0^2 sigma_v^2` with
+    `sigma_v^2 = (1/6 pi^2) int P_lin dk`, the leading low-k nonlinear correction
+    (`P_13 -> -k^2 sigma_v^2 P_lin`); a table at another z or cosmology is off at
+    order unity. Pair a halofit table with the kh-10 linear table, not the v28 one."""
     if linear.k[0] != galaxy.k[0]:
         raise ValueError(
             f"P(k) tables start at different k ({linear.k[0]} vs {galaxy.k[0]} h/Mpc)"
@@ -119,12 +117,10 @@ def radius_index(box: Box) -> np.ndarray:
 
 
 def pk_on_grid(spectrum, box: Box):
-    """Evaluate `spectrum(|k|)` on the rfft grid; DC set to 0. `spectrum` is any
-    callable of k (h/Mpc) returning (Mpc/h)^3.
-
-    `spectrum` is called once on `k_f sqrt(q)` for every integer `q <= 3 (N/2)^2` and
-    gathered by `radius_index`. Not bitwise against `spectrum(k_grid(box)[2])`: the two
-    `|k|` constructions round differently (<= 2 eps), so P moves by ~1e-15 relative."""
+    """Evaluate `spectrum(|k|)` (any callable of k in h/Mpc) on the rfft grid, DC = 0.
+    Calls `spectrum` once on `k_f sqrt(q)` for every integer `q <= 3 (N/2)^2` and
+    gathers by `radius_index`; ~1e-15 relative from `spectrum(k_grid(box)[2])`, not
+    bitwise (the two `|k|` constructions round differently)."""
     n2 = box.n_mesh // 2
     table = spectrum(box.k_f * np.sqrt(np.arange(3 * n2 * n2 + 1, dtype=np.float64)))
     P = np.asarray(table, dtype=np.float64)[radius_index(box)]

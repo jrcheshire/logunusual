@@ -1,3 +1,5 @@
+"""Box geometry, k-grid conventions, Hermitian weights, sinc windows, CIC alias."""
+
 import math
 
 import numpy as np

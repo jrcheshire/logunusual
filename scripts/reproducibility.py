@@ -1,11 +1,11 @@
-"""G8: same seed -> same catalog, across two fresh processes.
+"""Same seed -> same catalog, across two fresh processes.
 
     pixi run python scripts/reproducibility.py [--n 64] [--L 500]
 
-Runs the field stage and one catalog in two subprocesses and compares the bytes. On
-Linux (XLA CPU deterministic in the umbrella record) the result must be identical; on
-macOS-arm64 the field stage can differ in the last bit, so the script REPORTS the
-number of differing cells and the max relative difference rather than asserting.
+Runs the field stage and one catalog in two subprocesses and compares the bytes of
+`delta_g`, `psi_z`, positions and cells. On Linux (XLA CPU is deterministic) they must
+be identical, else exit 1; on macOS-arm64 the field stage can differ in the last bit,
+so the script REPORTS differing cells and the max relative difference instead.
 """
 
 import argparse

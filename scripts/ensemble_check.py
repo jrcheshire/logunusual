@@ -1,4 +1,4 @@
-"""M5 ensemble readout: gates E1 and E2 over a run's `summary.json` files (ROADMAP M5).
+"""Integrity and density checks over an ensemble's `summary.json` files.
 
     pixi run python scripts/ensemble_check.py RUN_DIR [--manifest PATH] [--n 100]
         [--out runs/ensemble/ensemble_check.json]
@@ -7,12 +7,13 @@ RUN_DIR holds `realization_NNNNN/summary.json` (the catalogs need not be present
 `--manifest` is the job's `sha256sum` manifest, which gets one line per realization
 whose catalog passed `logunusual check`.
 
-E1: realizations 0..n-1 all present, one config hash, every per-bin seed (and ic /
-draw seed) distinct, the manifest lists exactly those n catalogs. E2: per bin, the
-ensemble mean of `realized_over_target` against `1 + edge`, with SE from the scatter
-over realizations; `edge = 3 sigma_s^2 (rmax - rmin) / (rmax^3 - rmin^3)` is the
-second-order excess from the radial RSD shift across a curved shell (sigma_s = f
-times the rms of one displacement component). |z| <= 3 passes.
+Integrity: realizations 0..n-1 all present and no others, one config hash, every
+per-bin seed (and ic / draw seed) distinct, the manifest lists exactly those n
+catalogs. Density: per bin, the ensemble mean of `realized_over_target` against
+`1 + edge`, SE from the scatter over realizations; `edge = 3 sigma_s^2 (rmax - rmin) /
+(rmax^3 - rmin^3)` is the second-order excess from the radial RSD shift across a
+curved shell (sigma_s = f times the rms of one displacement component). |z| <= 3
+passes. Exits 0 only if both pass; bars in `docs/validation.md`.
 """
 
 import argparse

@@ -1,6 +1,6 @@
 """Shell product contracts: geometry identities, mask and selection identities, radial
-RSD identities and its plane-parallel limit, the exact Poisson gate on a uniform
-field, streaming bit-equality."""
+RSD identities and its plane-parallel limit, the exact Poisson check on a uniform
+field, the radial-buffer requirement, the angular pre-cut, streaming bit-equality."""
 
 import numpy as np
 import pytest
@@ -130,7 +130,6 @@ def test_select_identity_and_inclusive_edges(mask):
     ref = (r >= 30.0) & (r <= 70.0) & mask.values[hp.ang2pix(16, th, ph, nest=True)]
     assert np.array_equal(keep, ref)
     assert 0 < keep.sum() < keep.size
-    # without a mask only the radial cut acts
     assert np.array_equal(shell.select(xyz, s, None), (r >= 30.0) & (r <= 70.0))
     # inclusive edges, on an axis inside the mask band
     edge = np.array(
@@ -160,7 +159,6 @@ def test_rsd_radial_identities():
         f * np.einsum("ij,ij->i", psi[cell], xhat),
         atol=1e-12,
     )
-    # f = 0 is the identity; a galaxy at the origin is left in place
     assert np.array_equal(shell.rsd_radial(xyz.copy(), cell, psi, 0.0), xyz)
     z = np.zeros((1, 3))
     assert np.array_equal(shell.rsd_radial(z.copy(), np.array([0]), psi, f), z)
@@ -205,8 +203,7 @@ def test_rsd_moves_galaxies_across_the_shell_edges():
     eps = 1e-3
     psi = np.array([[5.0, 0.0, 0.0], [-5.0, 0.0, 0.0]])
     f = 1.0
-    # outward Psi carries a galaxy just inside rmax out; inward Psi brings one just
-    # outside back in
+    # outward Psi carries a galaxy just inside rmax out; inward brings one back in
     xyz = np.array([[70.0 - eps, 0.0, 0.0], [70.0 + eps, 0.0, 0.0]])
     keep_real = shell.select(xyz.copy(), s, None)
     red = shell.rsd_radial(xyz.copy(), np.array([0, 1]), psi, f)
@@ -224,10 +221,9 @@ def _uniform_fields(spectrum, box, seed, eps=1e-4):
 
 
 def test_sample_shell_uniform_field_is_poisson_in_the_shell(spectrum, mask):
-    # With P_in x 1e-4 the field is uniform to 1e-2 in delta, uniform-in-cell
-    # placement covers the shell, HEALPix pixels are equal-area: N_kept is Poisson
-    # with mean nbar fsky V_shell (exact), and the draws over the window are
-    # Poisson with mean sum(lambda).
+    # P_in x 1e-4: delta uniform to 1e-2, uniform-in-cell placement, equal-area
+    # pixels, so N_kept ~ Poisson(nbar fsky V_shell) exactly and the window's draws
+    # ~ Poisson(sum lambda).
     box = Box(24, 240.0)  # dx 10
     s = shell.Shell(40.0, 90.0, 20.0)
     nbar = 2e-2
@@ -242,7 +238,6 @@ def test_sample_shell_uniform_field_is_poisson_in_the_shell(spectrum, mask):
     assert abs(z) < 4.0, z
     z_draw = (stats.n_drawn - stats.lam_window) / np.sqrt(stats.lam_window)
     assert abs(z_draw) < 4.0, z_draw
-    # every kept galaxy satisfies the selection; the radial histogram adds up
     assert np.all(shell.select(xyz, s, mask))
     assert stats.r_hist.sum() == stats.n_kept
     # a galaxy that left the box sits beyond rmax + buffer: never among the kept
@@ -314,7 +309,7 @@ def _required_full_grid(box, s, f, psi):
 
 
 def _required_magnitude_bound(box, s, f, psi):
-    """The guard before the line-of-sight test: radial shift bounded by `f|Psi_c|`."""
+    """The looser magnitude bound: radial shift bounded by `f|Psi_c|`, no direction."""
     r = shell.cell_radius(box).reshape(-1)
     reach = 0.5 * np.sqrt(3.0) * box.dx + f * np.sqrt((psi**2).sum(1))
     outer = (r > s.rmax) & (r - reach <= s.rmax)
@@ -368,10 +363,9 @@ def test_required_buffer_is_the_exact_feeding_condition(spectrum):
 
 
 def test_no_undrawn_cell_reaches_the_shell_at_the_required_buffer(spectrum):
-    # Plant radial displacements in undrawn cells on both sides of the shell (outward
-    # inside it, inward beyond it), set the buffer to exactly the requirement, and move
-    # points of EVERY undrawn cell (its corners and interior samples) by the radial RSD
-    # map: none may land in the shell.
+    # Plant radial displacements in undrawn cells both sides of the shell, set the
+    # buffer to exactly the requirement, and move the corners and interior samples of
+    # EVERY undrawn cell by the radial RSD map: none may land in the shell.
     box, F, f = _guard_fixture(spectrum)
     base = shell.Shell(40.0, 52.0, 18.0)  # r_lo 22, r_hi 70: undrawn cells both sides
     r = shell.cell_radius(box).reshape(-1)
@@ -379,12 +373,9 @@ def test_no_undrawn_cell_reaches_the_shell_at_the_required_buffer(spectrum):
     # only the planted cells move, so each side's requirement is theirs alone (the
     # fixture field's own Psi needs 25.9 outside, which would hide the inner side)
     psi3 = {a: np.zeros(box.shape) for a in "xyz"}
-    inner = np.flatnonzero((r > 16.0) & (r < 17.0))[
-        :4
-    ]  # r 16.6: f|Psi| >= 14.8 reaches 40
-    outer = np.flatnonzero((r > 71.0) & (r < 72.0))[
-        :4
-    ]  # r 71.2: f|Psi| >= 10.6 reaches 52
+    # inner r 16.6 reaches 40 at f|Psi| >= 14.8; outer r 71.2 reaches 52 at >= 10.6
+    inner = np.flatnonzero((r > 16.0) & (r < 17.0))[:4]
+    outer = np.flatnonzero((r > 71.0) & (r < 72.0))[:4]
     assert inner.size == 4 and outer.size == 4  # the fixture plants on both sides
     assert base.required_buffer(box, f, None) < 40.0 - 16.6  # the inner side binds
     for cells, v in ((inner, 28.0), (outer, -24.0)):
@@ -413,9 +404,8 @@ def test_no_undrawn_cell_reaches_the_shell_at_the_required_buffer(spectrum):
 
 
 def test_line_of_sight_guard_is_complete_for_any_direction(spectrum):
-    # Random-direction displacements in undrawn cells on both sides of the shell: at
-    # buffer = requirement no point of any undrawn cell lands in the shell, and the
-    # requirement never exceeds the f|Psi_c| bound.
+    # Random-direction displacements in undrawn cells both sides: at buffer =
+    # requirement nothing lands in the shell, and it never exceeds the f|Psi_c| bound.
     box, _, f = _guard_fixture(spectrum)
     base = shell.Shell(40.0, 52.0, 18.0)
     X = _centres(box)
@@ -440,10 +430,9 @@ def test_line_of_sight_guard_is_complete_for_any_direction(spectrum):
 
 
 def test_line_of_sight_guard_counts_a_tangential_displacement_through_the_chord():
-    # A displacement perpendicular to the centre's line of sight has no radial
-    # component at the centre, but off-centre points of the cell see part of it. Size
-    # the shell so a point of the cell lands inside while the cell's nearest radius
-    # (r_c - h) is beyond rmax: only the chord term can admit the cell.
+    # A displacement perpendicular to the centre's line of sight is radial only at
+    # off-centre points. A point of the cell lands inside while r_c - h is beyond
+    # rmax: only the chord term can admit the cell.
     box = Box(16, 160.0)
     f = 0.8
     X = _centres(box)
@@ -542,9 +531,8 @@ def _sparse_mask(nside=16):
 def test_angular_precut_is_an_exact_superset_of_the_feeding_cells(
     spectrum, mask, which
 ):
-    # Every galaxy that survives the radial + mask selection (drawn from the FULL
-    # radial window, RSD applied) comes from a cell the pre-cut keeps; and the pre-cut
-    # keeps fewer cells than the radial window when the mask does not cover the sky.
+    # Every galaxy kept by the radial + mask selection (drawn from the FULL radial
+    # window, RSD applied) comes from a cell the pre-cut keeps.
     m = mask if which == "band" else _sparse_mask()
     box = Box(16, 160.0)
     s = shell.Shell(20.0, 40.0, 35.0)
@@ -569,8 +557,6 @@ def test_angular_precut_is_an_exact_superset_of_the_feeding_cells(
             n_kept += keep.sum()
         assert n_kept > 0
         assert np.all(P.reshape(-1)[fed]), "a kept galaxy came from a cut cell"
-    # and the two samplers agree on what is kept, galaxy for galaxy: with the pre-cut
-    # the cut cells draw nothing and every other slab is on the same stream
     F = field.generate_fields(spectrum, 1.5, box, 51, psi_axes="xyz")
 
     def run(pre):
@@ -583,9 +569,7 @@ def test_angular_precut_is_an_exact_superset_of_the_feeding_cells(
         return np.concatenate(out)
 
     a, b = run(True), run(False)
-    # different draws inside the slabs that lost cells, so compare as SETS is not
-    # possible; what must agree exactly is the count of feeding cells' contribution:
-    # kept galaxies of slabs with no cut cell are identical
+    # each slab is its own stream: slabs with no cut cell keep identical galaxies
     cut_slabs = np.flatnonzero((W & ~P).reshape(box.n_mesh, -1).any(axis=1))
     sa = np.floor((a[:, 0] + 0.5 * box.box_size) / box.dx).astype(int)
     sb = np.floor((b[:, 0] + 0.5 * box.box_size) / box.dx).astype(int)

@@ -1,4 +1,5 @@
-"""Spectrum loader and the grid-native P -> P_G transform (gate G1)."""
+"""Spectrum loader, per-radius table, the grid-native P -> P_G transform, and the
+linear/galaxy table pair check."""
 
 import math
 
@@ -36,11 +37,10 @@ def test_spline_extrapolates_as_power_laws(spectrum):
 @pytest.mark.parametrize("n, L", [(16, 160.0), (32, 320.0), (64, 640.0), (64, 1000.0)])
 @pytest.mark.parametrize("bias", [1.0, 1.76])
 def test_pk_on_grid_table_matches_direct_evaluation(spectrum, n, L, bias):
-    # `pk_on_grid` gathers a per-radius table; the reference evaluates the spectrum on
-    # `k_grid`'s |k|. The index must be exact, and P may move only by rounding:
-    # slope_max * |dk/k| (the two |k| constructions, measured here; <= 2 eps) plus
-    # 4 ulp of max |ln P| (P = exp(spline(ln k)): each side's spline + exp rounds by
-    # ~2 ulp of ln P). Measured 9 eps on every v28 table against a bound of ~37.
+    # Table gather vs direct evaluation on `k_grid`'s |k|: the index must be exact and
+    # P may move only by rounding, slope_max * |dk/k| (the two |k| constructions,
+    # <= 2 eps) plus 4 ulp of max |ln P| (each side's spline + exp rounds by ~2 ulp of
+    # ln P). Measured 9 eps on every v28 table against a bound of ~37.
     box = Box(n, L)
     sp = lambda k: bias * bias * spectrum(k)  # noqa: E731
     _, _, kmag = k_grid(box)
@@ -94,14 +94,11 @@ def test_grid_xi_matches_closed_form_gaussian_pair():
 
 
 def test_grid_pkG_second_order_expansion_is_exact_for_gaussian_pair():
-    # xi_G = log1p(eps xi) = eps xi - eps^2 xi^2 / 2 + O(eps^3); xi^2 is itself Gaussian
-    # with width R/sqrt(2), so its transform is closed-form. Removing the DC mode shifts
-    # xi by c0 = P(0)/V, whose square adds `+eps c0 P(k)` at second order. The residual
-    # after removing the two leading orders must scale as eps^3. At high k the
-    # second-order term
-    # (width R/sqrt 2 in k-space) outlives the first (width R): the UNCLIPPED P_G goes
-    # negative there, which is the Xavier et al. non-attainability, and `grid_pkG` must
-    # report exactly those modes as clipped.
+    # xi_G = log1p(eps xi) = eps xi - eps^2 xi^2 / 2 + O(eps^3); xi^2 is Gaussian of
+    # width R/sqrt(2), so closed-form. The DC shift c0 = P(0)/V adds `+eps c0 P(k)` at
+    # second order; the residual after two orders must scale as eps^3. At high k the
+    # second-order term outlives the first, so the UNCLIPPED P_G goes negative (Xavier
+    # et al. non-attainability) and `grid_pkG` must report exactly those modes.
     box = Box(64, 640.0)
     A, R = 1.0, 40.0
     P, xi = _gaussian_pair(A, R)

@@ -1,17 +1,18 @@
-"""M4 f_NL measurements; writes `runs/attainability/<mode>_<stamp>.json`.
+"""Whether each bin's target is reachable by a lognormal, over f_NL values and galaxy
+tables; writes `runs/attainability/<mode>_<stamp>.json`.
 
-    pixi run python scripts/attainability.py attain [--fnl -100 -10 -1 1 10 100] [--bins 1 7]
-        [--grid-scale 2] [--pk-template NAME] [--pk-galaxy-template NAME]
+    pixi run python scripts/attainability.py attain [--fnl -100 -10 -1 1 10 100]
+        [--bins 1 7] [--grid-scale 2] [--pk-template NAME] [--pk-galaxy-template NAME]
 
-`attain`: for every v28 bin at its production grid (times `--grid-scale`, rounded as
-`RunConfig.effective_bin` does), the galaxy target `b(k)^2 P_gal / sinc^2` through the
-grid-native P -> P_G conversion (the field stage's own call, no sampling): `xi_min`,
-sigma^2, clipped P_G modes and their power fraction, and what the bias does on the box
-(`b(k_f) / b`, the k where b(k) changes sign). f_NL = 0 is the reference row; one
-`matter` row per bin is the linear target `P / sinc^2`. Tables: `--pk-template` names
-the linear table and `--pk-galaxy-template` the galaxy one (`{z:g}` is the bin's
-z_eff; defaults: the bin's `pk_file`, and the linear table), checked as a pair by
-`pk.check_table_pair` as the driver does.
+For every v28 bin at its production grid (times `--grid-scale`, rounded as
+`RunConfig.effective_bin` does), the galaxy target `b(k)^2 P_gal / sinc^2` goes through
+the field stage's own P -> P_G conversion (no sampling). Each row: `xi_min`, sigma^2,
+clipped P_G modes and their power fraction, `b(k_f) / b` and the k where b(k) changes
+sign. f_NL = 0 is the reference row; one `matter` row per bin is `P / sinc^2`.
+`--pk-template` names the linear table and `--pk-galaxy-template` the galaxy one
+(`{z:g}` is the bin's z_eff; defaults: the bin's `pk_file`, then the linear table);
+the pair is checked by `pk.check_table_pair`, as in a run. With f_NL != 0 or a galaxy
+table, a clipped galaxy row is a target a run refuses (`docs/construction.md`).
 """
 
 import argparse

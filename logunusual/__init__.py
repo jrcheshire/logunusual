@@ -1,9 +1,9 @@
 """logunusual -- fast lognormal galaxy mock generator (JAX + numpy).
 
-Per-bin lognormal mock catalogs (observer-centred shells, RSD applied, parquet with
-x/y/z + bin), built so that the field stage runs on JAX (CPU or CUDA) and the
-galaxy stage is vectorised per cell instead of looped per galaxy. See ROADMAP.md for
-milestones and CLAUDE.md for the product contract and conventions.
+Per-bin lognormal mock catalogs (observer-centred shells, radial RSD, one parquet of
+x/y/z + bin per realization). The field stage runs on JAX (CPU or CUDA); the galaxy
+stage is vectorised per cell. Entry points: `config.RunConfig`,
+`run.generate_realization`, the `logunusual` CLI. Method in `docs/construction.md`.
 """
 
 from importlib.metadata import PackageNotFoundError, version

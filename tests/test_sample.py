@@ -45,14 +45,11 @@ def test_placement_inverts_to_counts_and_stays_in_box(p):
 
 
 def test_slab_streams_are_deterministic_distinct_and_local():
-    # The same (seed, slab) gives the same numbers; different slabs and different
-    # seeds give different numbers; a slab's placement does not move when another
-    # slab's counts change (each slab is its own stream).
+    # A slab's stream depends on (seed, slab) only. Neighbouring slabs and seeds share
+    # NO values: a Philox differing only in its counter emits the same numbers shifted
+    # by a block, correlating adjacent slabs, so the slab goes into the key.
     a = sample.slab_rng(8, 3).random(64)
     assert np.array_equal(a, sample.slab_rng(8, 3).random(64))
-    # streams of neighbouring slabs (and of neighbouring seeds) share NO values: a
-    # Philox that differed only in its counter would emit the same numbers shifted
-    # by a block, which correlates adjacent slabs (caught by G10, 2026-09-20)
     for other in (sample.slab_rng(8, 4), sample.slab_rng(8, 2), sample.slab_rng(9, 3)):
         assert not np.intersect1d(a, other.random(256)).size
     box = Box(6, 12.0)
@@ -69,8 +66,7 @@ def test_slab_streams_are_deterministic_distinct_and_local():
 
 @pytest.mark.parametrize("p", [1, 2])
 def test_place_slab_order_one_matches_the_general_path(p):
-    # jitter_p == 1 draws (n, 3) directly; the general path draws (n, 3, p) and sums.
-    # For p == 1 the two must be bitwise the same numbers.
+    # the jitter_p == 1 path draws (n, 3) directly: bitwise the general (n, 3, p) sum
     box = Box(4, 8.0)
     counts = np.random.default_rng(3).poisson(2.0, size=(box.n_mesh, box.n_mesh))
     xyz, cell = sample.place_slab(counts, 1, box, sample.slab_rng(5, 1), jitter_p=p)

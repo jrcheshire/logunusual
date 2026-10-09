@@ -23,7 +23,9 @@
 # final name is complete), a failed realization is logged to runs/ensemble/ and the
 # stream moves on, and three failures in a row stop the stream, so resubmitting the
 # same command fills gaps. Bitwise reproduction of a catalog needs the same 16-core
-# affinity (XLA-CPU's reduction order follows its thread pool).
+# affinity (XLA-CPU's reduction order follows its thread pool). Check the ensemble with
+#     pixi run python scripts/ensemble_check.py $ENSEMBLE_OUT/<run_name> \
+#         --manifest $ENSEMBLE_OUT/sha256_manifest.txt --n 100
 
 set -u
 export PATH="$HOME/.pixi/bin:$PATH"

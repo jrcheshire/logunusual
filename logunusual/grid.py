@@ -1,8 +1,8 @@
 """Periodic cubic mesh: box geometry, k-space grids, and the separable windows.
 
-Conventions (shared with disco-mocks / mbody): `k_i = 2 pi fftfreq(N, d=dx)`; real FFTs
-compress the LAST axis (z), which is also the plane-parallel line of sight. Cell
-centres sit at `(i + 0.5) dx`. Units: Mpc/h for lengths, h/Mpc for wavenumbers.
+Conventions: `k_i = 2 pi fftfreq(N, d=dx)`; real FFTs compress the LAST axis (z), which
+is also the plane-parallel line of sight. Cell centres sit at `(i + 0.5) dx`. Units:
+Mpc/h for lengths, h/Mpc for wavenumbers.
 """
 
 from dataclasses import dataclass
@@ -58,9 +58,8 @@ class Box:
 
 
 def frequencies(box: Box):
-    """Cycles per cell along a full axis and along the rfft axis: `fftfreq(N)`,
-    `rfftfreq(N)`. `k_i dx / (2 pi)` equals these, which is what the sinc windows use.
-    """
+    """Cycles per cell `k_i dx / 2 pi` along a full and the rfft axis: `fftfreq(N)`,
+    `rfftfreq(N)`."""
     n = box.n_mesh
     return np.fft.fftfreq(n), np.fft.rfftfreq(n)
 
@@ -94,10 +93,9 @@ def hermitian_weights(box: Box):
 
 
 def sinc_window(box: Box, power: float):
-    """Separable `prod_i sinc(k_i dx / 2 pi) ** power` on the rfft grid, where
-    `sinc(x) = sin(pi x) / (pi x)` (numpy convention), so the argument is the cycles per
-    cell. `power = 2` is the CIC / triangular-jitter amplitude window; `power = -2`
-    is the deconvolution applied to the fields. Exactly 1 at k = 0."""
+    """Separable `prod_i sinc(k_i dx / 2 pi) ** power` on the rfft grid, numpy's
+    `sinc(x) = sin(pi x) / (pi x)` of the cycles per cell; exactly 1 at k = 0.
+    `power = 2` is the CIC amplitude window."""
     f, fz = frequencies(box)
     wx = np.sinc(f) ** power
     wz = np.sinc(fz) ** power
@@ -105,18 +103,15 @@ def sinc_window(box: Box, power: float):
 
 
 def jitter_power_window(box: Box, p: int):
-    """Power window of the order-`p` intra-cell jitter (sum of `p` uniforms,
-    Irwin-Hall):
-    `prod_i sinc(k_i dx / 2 pi) ** (2 p)`. Dividing the target P(k) by it before the
-    lognormal transform makes the sampled catalog's continuum power equal the target in
-    the first Brillouin zone (see `field.target_on_grid`)."""
+    """Power window `prod_i sinc(k_i dx / 2 pi) ** (2 p)` of the order-`p` intra-cell
+    jitter (sum of `p` uniforms). The target P(k) is divided by it before the lognormal
+    transform (`field.target_on_grid`)."""
     return sinc_window(box, 2.0 * p)
 
 
 def cic_shot_noise_factor(box: Box):
-    """Jing (2005, ApJ 620, 559) eq. 20 for CIC: the aliased shot-noise power of a
-    Poisson process painted with CIC is `(1/nbar) prod_i [1 - (2/3) sin^2(k_i dx/2)]`,
-    before any window deconvolution. Returns the product on the rfft grid."""
+    """`prod_i [1 - (2/3) sin^2(k_i dx/2)]` on the rfft grid; times `1/nbar`, the
+    aliased CIC shot-noise power before deconvolution (Jing 2005, ApJ 620, 559)."""
     f, fz = frequencies(box)
     cx = 1.0 - (2.0 / 3.0) * np.sin(np.pi * f) ** 2
     cz = 1.0 - (2.0 / 3.0) * np.sin(np.pi * fz) ** 2

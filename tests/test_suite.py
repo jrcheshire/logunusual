@@ -1,4 +1,4 @@
-"""Invariants of the v28 bin table and the seed schedule (the M0 smoke test)."""
+"""Invariants of the v28 bin table, its growth rates and the seed schedule."""
 
 import math
 
@@ -23,8 +23,7 @@ def test_shells_tile_z_and_r_without_gaps():
 
 
 def test_box_holds_the_buffered_shell():
-    # The drawn region is the shell padded by RADIAL_BUFFER on both sides, centred
-    # on the observer: it must fit inside the box.
+    # the observer-centred shell padded by RADIAL_BUFFER both sides fits the box
     for b in BIN_SUITE_V28:
         assert b.L_box >= 2 * (b.rmax + RADIAL_BUFFER), b.name
 
@@ -46,10 +45,9 @@ def test_growth_rate_literals_are_the_distance_cosmology_growth_rate():
 @pytest.mark.parametrize("z", [0.0, 0.1, 0.9, 1.9, 5.0])
 def test_growth_rate_is_dlnD_dlna_of_growth_md(z):
     # Centred differences of ln D in u = ln a, Richardson-extrapolated over h and h/2:
-    # R's error is O(h^4), so against the true derivative it is ~1/15 of the step
-    # |R(h) - R(h/2)| (measured 0.067 at every z here). The quadrature's 1e-12
-    # relative error enters as ~1e-10, below every step. A growth rate off by more
-    # than one step is not the derivative of growth_md.
+    # R's error is O(h^4), ~1/15 of the step |R(h) - R(h/2)| (measured 0.067 at every
+    # z here); the quadrature's 1e-12 relative error enters as ~1e-10. A growth rate
+    # off by more than one step is not the derivative of growth_md.
     om = suite.OMEGA_M_DISTANCE
 
     def lnD(u):
@@ -69,7 +67,7 @@ def test_growth_rate_is_dlnD_dlna_of_growth_md(z):
 
 def test_seed_schedule_is_fixed_and_collision_free():
     assert seed_for(0, 1) == 137_000_001
-    assert seed_for(0, 4) == 137_000_004  # prod_v2__r00000__bin04
+    assert seed_for(0, 4) == 137_000_004  # realization 0, bin 4
     assert seed_for(99, 7) == 137_099_007
     seeds = {seed_for(r, b.index) for r in range(100) for b in BIN_SUITE_V28}
     assert len(seeds) == 700

@@ -1,18 +1,13 @@
 """Poisson sampling of the lognormal grid field into a galaxy catalog (numpy).
 
-Per cell: `lambda = nbar V_cell (1 + delta_g)` (>= 0 by construction of the field; a
-negative cell is a bug and is reported, never silently clipped), counts
-`rng.poisson(lambda)`, positions `cell corner + (u_1 + ... + u_p - (p-1)/2) dx` per
-axis (order-`p` jitter; `p = 1` is uniform within the cell), plane-parallel RSD
-`s_z = z + f Psi_z(cell)` with the galaxy's OWN cell displacement, then periodic wrap.
+Per cell: `lambda = nbar V_cell (1 + delta_g)`, counts `rng.poisson(lambda)`, positions
+`cell corner + (u_1 + ... + u_p - (p-1)/2) dx` per axis (`p = 1`: uniform in the cell),
+plane-parallel RSD `s_z = z + f Psi_z` from the galaxy's OWN cell, periodic wrap.
 
-RNG scheme (one scheme for every sampler in the package): the work unit is one x-slab
-(`i` fixed, `N^2` cells) and each slab has its own counter-based stream,
-`slab_rng(draw_seed, i)` = `Philox(key = draw_seed | i << 64)`. Within a slab the order
-is the Poisson draw over the slab's cells, then the placement uniforms galaxy-major.
-A catalog therefore depends on `(draw_seed, field)` alone: not on how many slabs are
-processed at once, in which order, or by how many threads. Empty slabs consume no
-random numbers, and a slab's draws do not move when another slab's window changes.
+RNG scheme (every sampler in the package): each x-slab has its own stream
+`slab_rng(draw_seed, i)`, drawing the slab's Poisson counts, then the placement
+uniforms galaxy-major. A catalog depends on `(draw_seed, field)` alone, so it is
+bitwise the same for any thread count or slab order.
 """
 
 from dataclasses import dataclass
@@ -33,20 +28,18 @@ def default_workers() -> int:
 
 
 def slab_rng(draw_seed: int, slab: int) -> np.random.Generator:
-    """The stream of x-slab `slab` for `draw_seed`: Philox with the 128-bit KEY
-    `draw_seed | slab << 64`, so every (seed, slab) is a distinct stream. The key is
-    the stream identifier; the counter is only a position within one stream, and two
-    generators that differ in `counter` alone emit the SAME numbers shifted by a few
-    blocks (the bug G10 caught on 2026-09-20)."""
+    """The stream of x-slab `slab`: Philox, 128-bit KEY `draw_seed | slab << 64`. The
+    slab goes in the key, not the counter: generators differing only in `counter` emit
+    the SAME numbers shifted by a few blocks, which would correlate slabs."""
     if not 0 <= int(draw_seed) < 2**64 or not 0 <= int(slab) < 2**64:
         raise ValueError("draw_seed and slab must be in [0, 2^64)")
     return np.random.Generator(np.random.Philox(key=int(draw_seed) | int(slab) << 64))
 
 
 def intensity(delta_g, nbar: float, box: Box):
-    """`lambda` per cell (float64, box shape) and the negative-cell diagnostics
-    `(clip_fraction, clipped_mass_fraction)`, which must both be 0 for a lognormal
-    field; kept as a guard against a future field that is not positive."""
+    """`(lambda, clip_fraction, clipped_mass_fraction)`: `lambda` per cell (float64,
+    box shape, negative cells set to 0) and the negative-cell diagnostics (0 for a
+    lognormal field)."""
     one_plus = 1.0 + np.asarray(delta_g, dtype=np.float64)
     neg = one_plus < 0.0
     clip_fraction = float(np.count_nonzero(neg) / one_plus.size)
@@ -72,8 +65,7 @@ def place_slab(counts_slab, i: int, box: Box, rng: np.random.Generator, jitter_p
     """Positions for x-slab `i` from its per-cell `counts_slab` (`N^2` entries, any
     shape) using `rng` (the slab's stream): `(xyz, flat_cell)` with `xyz` float64 in
     `[0, L)` and `flat_cell` the C-order index into the full grid. Galaxy-major draw
-    order; `jitter_p == 1` draws the uniforms directly (same numbers as the order-1
-    sum, no length-1 reduction)."""
+    order (for `jitter_p == 1`, the same numbers as the order-1 sum)."""
     n = box.n_mesh
     sub = np.asarray(counts_slab).reshape(-1)
     if sub.size != n * n:
@@ -100,8 +92,7 @@ def place_slab(counts_slab, i: int, box: Box, rng: np.random.Generator, jitter_p
 
 def place_slabs(counts, box: Box, draw_seed: int, *, jitter_p=1):
     """Yield `(xyz, flat_cell)` per non-empty x-slab of a given `counts` grid, each
-    slab placed with its own stream (the Poisson draw is not part of this call, so
-    the placement uniforms are the FIRST numbers of each slab's stream)."""
+    placed with the FIRST numbers of its slab's stream (no Poisson draw here)."""
     n = box.n_mesh
     counts = np.asarray(counts).reshape(-1)
     if counts.size != box.n_cells:
@@ -172,8 +163,8 @@ def sample_catalog(
     fields, nbar: float, draw_seed: int, *, f: float = 0.0, rsd: bool = True
 ) -> Catalog:
     """Draw one periodic-box catalog from `fields` (a `field.Fields`), serially over
-    slabs (this sampler serves the gates; the shell product is the parallel one).
-    `rsd` needs `fields.psi_z`."""
+    slabs (`shell.sample_shell` is the threaded shell sampler). `rsd` needs
+    `fields.psi_z`."""
     box = fields.box
     lam, clip_fraction, clipped_mass = intensity(fields.delta_g, nbar, box)
     lam_total = float(lam.sum())

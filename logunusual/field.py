@@ -1,29 +1,12 @@
-"""Field stage (JAX, eager): white noise -> Gaussian fields -> lognormal galaxy and
-matter fields -> line-of-sight displacement.
+"""Field stage (JAX, eager, x64 enabled on import): white noise -> Gaussian fields ->
+lognormal galaxy and matter fields -> displacement. Entry point `generate_fields`;
+construction in `docs/construction.md`.
 
-Runs on whatever device JAX has (CPU today, CUDA in the `gpu` env). The module
-enables x64 on import and float64 is the default; `dtype="f32"` halves the device
-footprint (see `resolve_dtype`). No `jax.jit` in M1 (one program, so the
-reproducibility gate has one thing to characterise).
-
-Construction (decided 2026-09-04 after measuring the alternatives, see CLAUDE.md):
-- The TARGET grid spectrum is `P(k) / prod_i sinc(k_i dx/2pi)^(2p)` with `p` the
-  intra-cell jitter order used by the sampler (default 1: uniform within the cell).
-  By the grid identity (`pk.grid_pkG`) the lognormal grid field then has exactly that
-  power in the ensemble, and the catalog -- cell intensities spread by the jitter
-  kernel -- has continuum power exactly `P(k)` inside the first Brillouin zone. No
-  post-transform deconvolution, so `1 + delta >= 0` everywhere by construction. (The
-  post-transform `sinc^-2` correction clips ~1/3 of the cells and ~27% of the galaxies
-  at bin-5 settings; deconvolving a p = 2 target gives `xi < -1`, i.e. no lognormal.)
-- `G_k = rfftn(w) * sqrt(P_G(k) / V_cell)`, `w` unit white noise from numpy
-  (`default_rng(ic_seed)`), so the estimator normalisation `V/N^6 |G_k|^2` returns P_G.
-- `1 + delta = exp(G) / mean_box(exp G)` (box-mean normalisation), both fields.
-- Displacement `Psi_k = i k / k^2 delta_m,k` (linearised continuity on the matter
-  lognormal field, Agrawal et al. 2017), DC = 0, in Mpc/h; the growth rate multiplies
-  it at sampling time. The matter target carries the same jitter deconvolution, so the
-  displacement a galaxy inherits from its cell is exact in the first zone too. Any
-  subset of the three components can be built (`psi_axes`): the plane-parallel box
-  needs `z` only, the observer-centred shell product needs all three.
+The target `P(k) / prod_i sinc(k_i dx/2pi)^(2p)` (`p` the jitter order) is deconvolved
+BEFORE the lognormal transform, so `1 + delta >= 0` and, by the grid identity
+(`pk.grid_pkG`), the catalog's continuum power is `P(k)` in the first Brillouin zone.
+`G_k = rfftn(w) sqrt(P_G / V_cell)` (so `V/N^6 |G_k|^2` estimates P_G); displacement
+`Psi_k = i k / k^2 delta_m,k` on the matter lognormal field (Agrawal et al. 2017).
 """
 
 import os
@@ -77,13 +60,9 @@ DTYPES = {"f64": ("float64", "complex128"), "f32": ("float32", "complex64")}
 def resolve_dtype(dtype):
     """`"f64"` / `"f32"` -> the `(real, complex)` JAX dtypes of the field stage.
 
-    Only the DEVICE arrays take this dtype. The white noise is always drawn in
-    float64 (a numpy generator consumes its stream differently per dtype, so drawing
-    natively would change the realization rather than its precision) and cast on the
-    way to the device, and `Fields.psi_flat` upcasts for the float64 sampler. The
-    knob is not a `RunConfig` field: f32 changes every catalog, so it stays an API /
-    instrument argument until it is a production choice that the config hash covers.
-    """
+    Only the device arrays take this dtype: the white noise is always drawn in float64
+    (numpy's stream depends on the dtype) and cast, and `Fields.psi_flat` upcasts for
+    the sampler. f32 changes every catalog, so it is not a `RunConfig` field."""
     if dtype not in DTYPES:
         raise ValueError(f"dtype must be one of {sorted(DTYPES)}, got {dtype!r}")
     real, cplx = DTYPES[dtype]
@@ -95,10 +74,8 @@ def displacement_k(delta_k, box: Box, axis: str):
     displacement (`axis` in "xyz")."""
     if axis not in AXES:
         raise ValueError(f"axis must be one of {AXES!r}, got {axis!r}")
-    # The k components come from numpy in float64, and under x64 a single float64
-    # array in this expression widens the whole of it -- that, not the `1j`, is what
-    # drags an f32 field stage back to complex128 (measured, jax 0.10.1). Matching
-    # them to `delta_k` keeps `1j * comps / k2 * delta_k` at complex64.
+    # Under x64 one float64 array widens the whole expression to complex128, so the
+    # (numpy, float64) k components are cast to `delta_k`'s precision.
     real_dt = jnp.float32 if delta_k.dtype == jnp.complex64 else jnp.float64
     comps = [jnp.asarray(a, dtype=real_dt) for a in k_components(box)]
     k2 = comps[0] ** 2 + comps[1] ** 2 + comps[2] ** 2
@@ -108,15 +85,12 @@ def displacement_k(delta_k, box: Box, axis: str):
 
 
 def displacement_z_k(delta_k, box: Box):
-    """`displacement_k(..., "z")` (the M1 plane-parallel line of sight)."""
+    """`displacement_k(..., "z")`, the plane-parallel line of sight."""
     return displacement_k(delta_k, box, "z")
 
 
-# The two pure device functions of the stage, in one place so `jax.jit` has something
-# to compile. Everything else in `generate_fields` either runs on the host (the
-# spectrum spline) or needs a value back from the device (`grid_pkG`'s diagnostics),
-# and neither can live inside a jit. `box` and `axis` are static: `Box` is a frozen
-# dataclass, so it hashes, and the shapes have to be concrete for the FFTs anyway.
+# The stage's two pure device functions, what `jit=True` compiles (the spectrum spline
+# runs on the host and `grid_pkG` returns diagnostics). `box` and `axis` are static.
 
 
 def coloured_lognormal(white_k, pkG_grid, box: Box):
@@ -141,8 +115,7 @@ class Fields:
     ic_seed: int
     jitter_p: int
     delta_g: jax.Array  # galaxy lognormal grid field (>= -1 everywhere)
-    # displacement components in Mpc/h (growth rate NOT applied), keyed "x"/"y"/"z";
-    # only the requested axes are present
+    # requested displacement components "x"/"y"/"z", Mpc/h, growth rate NOT applied
     psi: dict = field(default_factory=dict)
     delta_m: jax.Array | None = None  # matter lognormal grid field
     diagnostics: dict = field(default_factory=dict)
@@ -181,25 +154,19 @@ def generate_fields(
     galaxy_table=None,
     trace=None,
 ) -> Fields:
-    """Galaxy field with target `b^2 P` and (if `rsd`) the displacement components
-    `psi_axes` (a subset of "xyz") from the matter field with target `P`; both
-    coloured from the SAME white noise, both targets deconvolved by the
-    order-`jitter_p` placement window. `spectrum` is the linear P(k);
-    `galaxy_table` (a nonlinear P(k), None = `spectrum`) replaces it in the galaxy
-    target only, so the matter field and displacements are those of the linear run
-    bitwise; with it, a galaxy P_G that clips any mode raises (at small cells halofit
-    is beyond a lognormal, and the excess spreads to every k). `fnl` (an
-    `fnl.LocalPNG`) makes the galaxy
-    target `b(k)^2 P` and leaves the matter field alone; None or f_NL = 0 is the
-    scalar-bias stage bitwise. With f_NL != 0 a galaxy P_G that clips any mode
-    raises: where b(k)^2 P falls toward zero at low k (f_NL < 0) the lognormal cannot
-    reach it, and the clipped field's power sits far above the target on exactly the
-    shells that carry the f_NL signal. Gaussian runs report clipping, as before.
-    `dtype` (`"f64"` / `"f32"`) is the precision of the DEVICE arrays, see
-    `resolve_dtype`. `jit` compiles the stage's two pure device
-    functions (`coloured_lognormal`, `displacement`); it is off by default because it
-    is not bit-preserving. `trace(label)` is called after each array step (memory
-    instrumentation)."""
+    """Galaxy field with target `b^2 P` and, if `rsd`, the displacement components
+    `psi_axes` (a subset of "xyz") of the matter field with target `P`; both coloured
+    from the SAME white noise, both targets deconvolved by the placement window.
+
+    `spectrum` is the linear P(k). `galaxy_table` (nonlinear P(k), None = `spectrum`)
+    replaces it in the galaxy target only; matter field and displacements stay bitwise
+    the linear run's. `fnl` (an `fnl.LocalPNG`) makes the galaxy target `b(k)^2 P`;
+    None or f_NL = 0 is the scalar-bias stage bitwise. With f_NL != 0 or a galaxy
+    table, any clipped galaxy P_G mode raises (the target is not attainable: f_NL < 0
+    on the lowest shells, halofit on fine cells); otherwise clipping is reported in
+    `diagnostics`. `dtype`: device precision (`resolve_dtype`). `jit` compiles
+    `coloured_lognormal` / `displacement` and is NOT bit-preserving. `trace(label)` is
+    called after each array step (memory instrumentation)."""
     trace = trace or (lambda label: None)
     real_dt, _ = resolve_dtype(dtype)
     _lognormal_of = coloured_lognormal_jit if jit else coloured_lognormal
