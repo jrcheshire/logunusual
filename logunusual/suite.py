@@ -1,12 +1,14 @@
 """The default bin table, seed schedule and constants (dependency-free).
 
-`BIN_SUITE_V28` is the seven-bin design of the SPHEREx v28 forecast: z = 0-2.2 split
-into shells, one observer-centred periodic box per shell; a run config can give any
-other table with the same fields. `rmin`, `rmax`: comoving edges (Mpc/h) in
-FlatLambdaCDM(H0=67.36, Om0=0.3153), the cosmology of the CAMB P(k) tables. `nbar`:
-forecast density summed over the five sigma_z/(1+z) < 0.2 samples; `b`: their
-number-weighted mean bias. `L_box` holds `2 (rmax + RADIAL_BUFFER)`; cells are
-~8-16 Mpc/h. `f`: `fnl.growth_rate_md(z_eff, OMEGA_M_DISTANCE)`, stored as literals.
+`BIN_SUITE_V28` is an example seven-bin table built from the public SPHEREx forecast
+products (`galaxy_density_v28_base_cbe.txt` in
+https://github.com/SPHEREx/Public-products): z = 0-2.2 split into shells, one
+observer-centred periodic box per shell; a run config can give any other table with
+the same fields. `rmin`, `rmax`: comoving edges (Mpc/h) in FlatLambdaCDM(H0=67.36,
+Om0=0.3153), the cosmology of the CAMB P(k) tables. `nbar`: density summed over the
+five sigma_z/(1+z) < 0.2 samples; `b`: their number-weighted mean bias. `L_box` holds
+`2 (rmax + RADIAL_BUFFER)`; cells are ~8-16 Mpc/h. `f`:
+`fnl.growth_rate_md(z_eff, OMEGA_M_DISTANCE)`, stored as literals.
 """
 
 from dataclasses import dataclass

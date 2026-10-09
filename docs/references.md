@@ -56,18 +56,14 @@ deconvolution, clipping P_G >= 0, aliasing) are documented in code, e.g. nbodyki
   clustering calibration is limited to two-point statistics. A lognormal field is by
   construction a two-point object; `logunusual` is scoped to two-point uses (null tests,
   covariance shape).
-- SPHEREx f_NL forecasts: Heinrich, Dore & Krause 2023,
-  arXiv:2311.13082 (multi-tracer redshift-space bispectrum, photo-z errors); Wen,
-  Grasshorn Gebhardt & Dore 2026, arXiv:2607.06697 (SFB power spectrum, relativistic
-  effects; Fisher plus simulated Bayesian inference, no mocks); Shiveshwarkar, Brinckmann,
-  Loverde & McQuinn 2023, arXiv:2306.07517, PRD (post-inflationary scale-dependent bias
-  from light relics and ionising radiation can bias f_NL by 0.1-1 sigma for SPHEREx; a
-  caution about which b(k) an f_NL-injected mock should carry).
+- Shiveshwarkar, Brinckmann, Loverde & McQuinn 2023, arXiv:2306.07517, PRD:
+  post-inflationary scale-dependent bias from light relics and ionising radiation can
+  bias f_NL inferences; a caution about which b(k) an f_NL-injected mock should carry.
 
 ## Lognormal mocks for covariance and wide-angle work
 
-- **Grasshorn Gebhardt & Dore 2024**, arXiv:2310.17677: validates the SPHEREx SFB power
-  spectrum pipeline on lognormal simulations and on complete and realistic eBOSS DR16 LRG
+- **Grasshorn Gebhardt & Dore 2024**, arXiv:2310.17677: validates a spherical
+  Fourier-Bessel (SFB) power spectrum pipeline on lognormal simulations and on complete and realistic eBOSS DR16 LRG
   EZmocks, with wide-angle effects handled exactly by the SFB basis.
 - **Beutler & McDonald 2021**, arXiv:2106.06324, JCAP 11 (2021) 031: matrix-based
   framework for power spectrum multipoles including wide-angle effects and the survey

@@ -1,7 +1,7 @@
 [project]
 name = "logunusual"
-version = "0.0.1"
-description = "Fast lognormal galaxy mock generator (JAX + numpy) for SPHEREx per-bin mocks"
+version = "0.1.0"
+description = "Fast lognormal galaxy mock generator (JAX + numpy)"
 authors = [{ name = "James Cheshire", email = "cheshire@caltech.edu" }]
 requires-python = ">=3.12"
 # Runtime deps are managed by pixi (conda) + the `setup` task (pip); see below.

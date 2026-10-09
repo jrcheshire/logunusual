@@ -15,11 +15,12 @@ to one parquet per realization. Inputs are one P(k) TSV per bin (optionally a se
 nonlinear table for the galaxy target only); local f_NL enters as a scale-dependent
 galaxy bias built from the bin's linear table.
 
-The **default inputs** are a survey forecast: the seven-bin v28 table in `suite.py`
-(shells partitioning z = 0-2.2, densities, biases, growth rates) and, when given, a
-survey mask. Nothing else in the code knows about a survey; any bin table with the
-same fields can be given in a run config. The package has no dependency on any other
-repository.
+The **default bin table** is an example: the seven-bin v28 table in `suite.py` (shells
+partitioning z = 0-2.2, densities, biases, growth rates), with densities and biases
+from the public SPHEREx forecast products (`galaxy_density_v28_base_cbe.txt`,
+https://github.com/SPHEREx/Public-products). Nothing else in the code knows about a
+survey; any bin table with the same fields can be given in a run config. The package
+has no dependency on any other repository.
 
 Docs:
 - `docs/construction.md` -- the algorithm, its equations and why each step is built
@@ -155,10 +156,8 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
   explicit, recorded decision.** A check that cannot fail is not a check.
 - **git:** feature branches, squash-merge onto `main`. Push, open or merge a PR only on
   explicit instruction; run the local gate first.
-- **Do not calibrate mock inputs to SPHEREx data** (it puts the contamination into the
-  null); the input ladder is linear -> halofit -> literature b(k)/HOD -> external
-  survey.
-- Keep SPHEREx-specific survey config (mask, forecast densities) out of any public
-  surface; the v28 numbers in `suite.py` are forecast products, not data.
+- **Do not calibrate mock inputs to the data the mocks are compared with** (it puts the
+  contamination into the null); the input ladder is linear -> halofit -> literature
+  b(k)/HOD -> external survey.
 - Heavy local runs: price them first (a full seven-bin realization peaks at ~14 GB RSS;
   the field stage's device peak is 12 x N^3 float64).
