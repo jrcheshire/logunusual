@@ -67,7 +67,7 @@ def test_growth_rate_is_dlnD_dlna_of_growth_md(z):
     assert abs(fnl.growth_rate_md(z, om) - r2) <= abs(r1 - r2)
 
 
-def test_seed_schedule_matches_prod_v2_and_is_collision_free():
+def test_seed_schedule_is_fixed_and_collision_free():
     assert seed_for(0, 1) == 137_000_001
     assert seed_for(0, 4) == 137_000_004  # prod_v2__r00000__bin04
     assert seed_for(99, 7) == 137_099_007

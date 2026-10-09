@@ -106,7 +106,7 @@ def check(args) -> int:
         dk = np.max(np.abs(kh / old[:, 0] - 1.0))
         dp = np.max(np.abs(pk / old[:, 1] - 1.0))
         print(f"z {z:g}: DIFFERENT, max |dk/k| {dk:.3e}, max |dP/P| {dp:.3e}")
-    print("P1:", "IDENTICAL" if ok else "DIFFERENT")
+    print("tables:", "IDENTICAL" if ok else "DIFFERENT")
     return 0 if ok else 1
 
 
@@ -125,7 +125,7 @@ def make(args) -> int:
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="mode", required=True)
-    c = sub.add_parser("check", help="P1: regenerate the v28 linear tables")
+    c = sub.add_parser("check", help="regenerate the v28 linear tables byte for byte")
     c.add_argument("--pk-dir", default="data")
     m = sub.add_parser("make", help="write tables for the v28 z_eff")
     m.add_argument("--model", choices=MODELS, required=True)

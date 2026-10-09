@@ -1,9 +1,9 @@
 """M3: device memory, CPU-vs-CUDA agreement and per-stage wall of the field stage.
 
-    pixi run -e gpu python scripts/m3_device.py ladder
-    pixi run -e gpu python scripts/m3_device.py ladder --bins bin05 --dtype f32
-    pixi run -e gpu python scripts/m3_device.py ulp --n 64 128 256
-    pixi run -e gpu python scripts/m3_device.py wall --bin bin05
+    pixi run -e gpu python scripts/device.py ladder
+    pixi run -e gpu python scripts/device.py ladder --bins bin05 --dtype f32
+    pixi run -e gpu python scripts/device.py ulp --n 64 128 256
+    pixi run -e gpu python scripts/device.py wall --bin bin05
 
 `ladder` walks the v28 bins at their production `(N_grid, L_box, b)` -- bin01..bin05
 cover every distinct grid size, since bin06 and bin07 also run at 512^3 and a

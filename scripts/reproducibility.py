@@ -1,6 +1,6 @@
 """G8: same seed -> same catalog, across two fresh processes.
 
-    pixi run python scripts/m1_reproducibility.py [--n 64] [--L 500]
+    pixi run python scripts/reproducibility.py [--n 64] [--L 500]
 
 Runs the field stage and one catalog in two subprocesses and compares the bytes. On
 Linux (XLA CPU deterministic in the umbrella record) the result must be identical; on

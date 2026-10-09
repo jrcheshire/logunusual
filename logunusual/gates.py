@@ -1,5 +1,5 @@
 """The statistical gates (M1: periodic box; M2: shell product), as functions returning
-plain dicts so that the slow tests and `scripts/m{1,2}_gates.py` run the same code.
+plain dicts so that the slow tests and `scripts/gates_{box,shell}.py` run the same code.
 
 Discipline (umbrella memory): the statistic is formed PER REALIZATION and then averaged;
 the standard error is the scatter across realizations (never a Gaussian formula on a

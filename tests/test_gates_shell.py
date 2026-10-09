@@ -44,22 +44,22 @@ def band_mask(tmp_path_factory):
     return shell.AngularMask.from_h5(p)
 
 
-def test_g10_shell_density_and_profile(spectrum, band_mask):
+def test_shell_density_and_profile(spectrum, band_mask):
     # 16 seeds: the shell-scale sample variance of a b = 1.76 lognormal field gives
     # a per-realization scatter of a few percent in the total, so the SE is ~1%:
     # a consistency gate (|z| < 4), the SE printed.
     res = gates.gate_shell_density(
         spectrum, B5, F5, BOX, SHELL, band_mask, NBAR, range(7000, 7016)
     )
-    _report("G10 N_kept / (nbar fsky V_shell)", res["total"])
-    _report("G10 n(r) / nbar per sub-shell", res["profile"])
-    print("G10 draws", res["draws"])
+    _report("shell N_kept / (nbar fsky V_shell)", res["total"])
+    _report("shell n(r) / nbar per sub-shell", res["profile"])
+    print("shell draws", res["draws"])
     assert res["draws"]["passed"], res["draws"]
     assert res["total"].passed, res["total"].z
     assert res["profile"].passed, res["profile"].z
 
 
-def test_g11_one_x_mesh_response(spectrum):
+def test_one_x_mesh_response(spectrum):
     # The M1 catalog gate with the estimator on the generator's own mesh: the
     # deconvolved monopole over b^2 P_in x estimator_response, k < k_nyq/2, on the
     # 32-seed bands of G5 with 64 seeds: the bands are sized for a Gaussian scatter to
@@ -70,10 +70,10 @@ def test_g11_one_x_mesh_response(spectrum):
     res = gates.gate_catalog(
         spectrum, B5, F5, BOX, BOX, NBAR, range(8000, 8064), band_seeds=32
     )
-    _report("G11 1x mesh: monopole vs b^2 P_in x response", res["monopole"])
+    _report("1x mesh: monopole vs b^2 P_in x response", res["monopole"])
     print(res["monopole"].extra)
     _report(
-        "G11 1x mesh: monopole vs fixed-field prediction", res["monopole_fixed_field"]
+        "1x mesh: monopole vs fixed-field prediction", res["monopole_fixed_field"]
     )
     assert res["monopole"].passed, res["monopole"].z
     assert res["monopole_fixed_field"].passed, res["monopole_fixed_field"].z

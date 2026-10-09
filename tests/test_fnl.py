@@ -16,7 +16,7 @@ B5 = 1.76
 OMEGA_R_H2 = 4.15e-5
 
 
-def _g12_residual(spectrum, png):
+def _m_residual(spectrum, png):
     """`M / M_{T=1}` at the table's lowest node, both in the LSS convention. The
     reference takes its growth from the integral directly, never from `png`, so a
     wrong normalisation inside `png` cannot cancel against it."""
@@ -27,7 +27,7 @@ def _g12_residual(spectrum, png):
     return float(fnl.poisson_M(k, spectrum, png)[0] / m_lim[0])
 
 
-def _g12_bound(spectrum, png):
+def _m_bound(spectrum, png):
     """What separates the table's M from the T = 1 limit with this growth integral, at
     the lowest node: radiation, which the integral omits, shifts D by order
     `(1 + z) a_eq`; and T(k) itself departs from 1 by at most ~2.2 q at low k (BBKS's
@@ -40,17 +40,17 @@ def _g12_bound(spectrum, png):
     return (1.0 + Z_TABLE) * a_eq + 2.2 * q_min
 
 
-def test_g12_m_matches_the_large_scale_limit(spectrum):
+def test_m_matches_the_large_scale_limit(spectrum):
     png = fnl.LocalPNG(f_nl=1.0)
-    r = _g12_residual(spectrum, png)
-    assert abs(1.0 - r) <= _g12_bound(spectrum, png), r
+    r = _m_residual(spectrum, png)
+    assert abs(1.0 - r) <= _m_bound(spectrum, png), r
 
 
 @pytest.mark.parametrize(
     "mutation",
     ["pivot_in_h_per_mpc", "no_nine_25ths", "cmb_normalisation", "A_s_off_by_2pct"],
 )
-def test_g12_fails_on_a_wrong_normalisation(spectrum, monkeypatch, mutation):
+def test_m_check_fails_on_a_wrong_normalisation(spectrum, monkeypatch, mutation):
     png = fnl.LocalPNG(f_nl=1.0)
     if mutation == "pivot_in_h_per_mpc":
         png = fnl.LocalPNG(f_nl=1.0, k_pivot=0.05)
@@ -60,8 +60,8 @@ def test_g12_fails_on_a_wrong_normalisation(spectrum, monkeypatch, mutation):
         object.__setattr__(png, "g0", 1.0)
     else:
         png = fnl.LocalPNG(f_nl=1.0, A_s=1.02 * suite.PRIMORDIAL_AS)
-    r = _g12_residual(spectrum, png)
-    assert abs(1.0 - r) > _g12_bound(spectrum, fnl.LocalPNG(f_nl=1.0)), r
+    r = _m_residual(spectrum, png)
+    assert abs(1.0 - r) > _m_bound(spectrum, fnl.LocalPNG(f_nl=1.0)), r
 
 
 def test_growth_integral():

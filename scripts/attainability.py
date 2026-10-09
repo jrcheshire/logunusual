@@ -1,6 +1,6 @@
-"""M4 f_NL measurements; writes `runs/m4/<mode>_<stamp>.json`.
+"""M4 f_NL measurements; writes `runs/attainability/<mode>_<stamp>.json`.
 
-    pixi run python scripts/m4_fnl.py attain [--fnl -100 -10 -1 1 10 100] [--bins 1 7]
+    pixi run python scripts/attainability.py attain [--fnl -100 -10 -1 1 10 100] [--bins 1 7]
         [--grid-scale 2] [--pk-template NAME] [--pk-galaxy-template NAME]
 
 `attain`: for every v28 bin at its production grid (times `--grid-scale`, rounded as
@@ -124,7 +124,7 @@ def main():
         }
     )
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    out = Path(args.out or f"runs/m4/{args.mode}_{stamp}.json")
+    out = Path(args.out or f"runs/attainability/{args.mode}_{stamp}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(res, indent=1))
     print(f"\nwrote {out} ({res['wall_s']:.0f} s)")
