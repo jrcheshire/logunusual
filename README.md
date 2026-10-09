@@ -8,9 +8,11 @@ stream per grid slab (so the catalog does not depend on the thread count), place
 uniformly within their cells, shifts them radially by their cell's linear-continuity
 displacement, and keeps those inside the shell and an optional HEALPix mask. Each
 realization is streamed to one parquet file. Options: a local-f_NL scale-dependent
-galaxy bias, and a nonlinear (e.g. halofit) galaxy target. The default bin table is a
-seven-shell survey forecast (`logunusual/suite.py`); any table with the same fields
-can be given in the run config.
+galaxy bias, and a nonlinear (e.g. halofit) galaxy target. The default bin table
+(`logunusual/suite.py`) is an example: seven shells over z = 0-2.2 with densities and
+biases from the public SPHEREx forecast products (`galaxy_density_v28_base_cbe.txt` in
+[SPHEREx/Public-products](https://github.com/SPHEREx/Public-products)). Any table with
+the same fields can be given in the run config.
 
 ## Install
 
