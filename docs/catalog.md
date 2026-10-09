@@ -70,8 +70,8 @@ if any problem is found.
 
 ## Metadata
 
-File-level key-value metadata; every value is a string (numbers via `str()`, so
-`None` appears as `None` and booleans as `True` / `False`). Global keys are plain;
+File-level key-value metadata; every value is a string (numbers via `str()`, booleans
+as `True` / `False`, a missing value as `none`). Global keys are plain;
 per-bin keys are prefixed `bin{index:02d}.` (e.g. `bin05.realized_nbar`).
 
 ### Global keys
@@ -127,11 +127,12 @@ per-bin keys are prefixed `bin{index:02d}.` (e.g. `bin05.realized_nbar`).
 | `pk_galaxy_file`, `pk_galaxy_sha256` | galaxy-target table and SHA-256 (the linear table's when the bin names none) |
 | `sigma2_galaxy`, `sigma2_matter` | cell variance of the galaxy and matter targets on the grid |
 | `xi_min_galaxy` | minimum of the galaxy target's grid correlation function |
-| `clipped_power_fraction` | galaxy `P_G` power set to zero over the power kept; 0 when the target is attainable |
+| `clipped_power_fraction`, `clipped_power_fraction_matter` | galaxy (matter) `P_G` power set to zero over the power kept; 0 when the target is attainable |
+| `n_clipped_galaxy`, `n_clipped_matter` | number of galaxy (matter) `P_G` modes clipped to zero |
 | `t_field_s`, `t_sample_s` | wall time of the field stage and of sampling + writing, s |
 | `peak_live_jax_bytes` | peak bytes of live JAX arrays during the field stage |
 | `fnl_delta_b_kf`, `fnl_b_kf_over_b` | `b(k) - b` and `b(k) / b` at the fundamental; with `f_nl != 0` only |
-| `fnl_k_zero` | lowest grid `|k|` at which `b(k)` changes sign, or `None`; with `f_nl != 0` only |
+| `fnl_k_zero` | lowest grid `|k|` at which `b(k)` changes sign, or `none`; with `f_nl != 0` only |
 
 ## summary.json
 

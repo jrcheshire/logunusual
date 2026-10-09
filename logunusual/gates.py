@@ -12,7 +12,7 @@ from dataclasses import dataclass, field as dc_field
 import numpy as np
 
 from . import field, fnl as _fnl, sample, shell, validate
-from .grid import Box, sinc_window
+from .grid import Box, hermitian_weights, sinc_window
 from .pk import pk_on_grid
 
 TOL = 0.02  # resolution: SE must be <= TOL / 3 in every gated band
@@ -27,10 +27,12 @@ def n_min_indep(n_real: int, tol: float = TOL) -> int:
 
 def band_edges(box: Box, k_max: float, n_min: int):
     """Merge kf-shells from low k upward until each band holds >= `n_min` independent
-    (half-grid) modes; the last partial band is merged into its predecessor."""
+    modes (`nmodes / 2`, see `validate.gaussian_se`); the last partial band is merged
+    into its predecessor."""
     edges = validate.shell_edges(box)
-    _, idx, nb = validate._shell_index(box)
-    counts = np.bincount(idx, minlength=nb + 1)[:nb]
+    k_mag, idx, nb = validate._shell_index(box)
+    herm = np.broadcast_to(hermitian_weights(box), k_mag.shape).ravel()
+    counts = 0.5 * np.bincount(idx, weights=herm, minlength=nb + 1)[:nb]
     out = [edges[0]]
     acc = 0
     for i in range(nb):

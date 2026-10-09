@@ -39,29 +39,22 @@ P(k) tables; it has no JAX and does not install the package.
 then two tab-separated columns, k in h/Mpc (positive, strictly increasing) and P in
 (Mpc/h)^3 (positive). The table is interpolated as a cubic spline in log-log with
 power-law tails beyond its end nodes; it should cover `sqrt(3) k_Nyquist` of the
-bin's grid. The CAMB tables for the default bins (Planck 2018) come from:
+bin's grid. The CAMB tables (Planck 2018) come from the `tables` env:
 
 ```sh
+pixi run -e tables pk-tables make-default    # the default bin table's linear tables
+pixi run -e tables pk-tables check           # regenerates them, compares byte for byte
 pixi run -e tables pk-tables make --model linear
 pixi run -e tables pk-tables make --model halofit
 ```
 
-These write `data/matterpower_camb_{lin,halofit}_kmax10_zeff=<z>.tsv` (kh 1e-4 to 10)
-for the seven default `z_eff`.
-
-`configs/v28_halofit.yaml` uses these two sets. The default bin table (and
-`configs/v28_default.yaml`) names `matterpower_camb_zeff=<z>.tsv` instead: linear, kh
-1e-4 to 1, 10001 nodes. `make` writes those bytes under its own naming, so rename:
-
-```sh
-pixi run -e tables pk-tables make --model linear --kh-max 1 --npoints 10001
-for z in 0.1 0.3 0.5 0.7 0.9 1.3 1.9; do
-  mv "data/matterpower_camb_lin_kmax1_zeff=$z.tsv" "data/matterpower_camb_zeff=$z.tsv"
-done
-pixi run -e tables pk-tables check    # regenerates them, compares byte for byte
-```
-
-`make` also takes `--z`, `--kh-min` and `--out-dir`.
+`make-default` writes the linear tables (kh 1e-4 to 1, 10001 nodes) under the names
+the default bin table and `configs/v28_default.yaml` use,
+`data/matterpower_camb_zeff=<z>.tsv`. `make` writes
+`data/matterpower_camb_{lin,halofit}_kmax10_zeff=<z>.tsv` (kh 1e-4 to 10), the pair
+`configs/v28_halofit.yaml` uses; it also takes `--z`, `--kh-min`, `--kh-max`,
+`--npoints` and `--out-dir`. Set `OMP_NUM_THREADS=1` on a shared machine (about 26 s
+for seven tables).
 
 **Mask (optional).** A HEALPix 0/1 map of kept pixels in HDF5: any NSIDE, an integer
 dataset (default name `MASK`), root attribute `ORDERING` = `NESTED` or `RING`, and

@@ -141,6 +141,7 @@ def test_fnl_realization_end_to_end(tmp_path):
     for b, row in zip(cfg.bins, s["bins"]):
         m = io.bin_metadata(meta, b.index)
         assert float(m["fnl_delta_b_kf"]) == row["fnl_delta_b_kf"] > 0
+        assert row["fnl_k_zero"] is None and m["fnl_k_zero"] == "none"  # b(k) > 0
     # the Gaussian run writes f_nl = 0 and nothing else of the f_NL block
     g, _ = _cfg(tmp_path, output_dir=str(tmp_path / "g"))
     generate_realization(g, 0, log=lambda *a: None)
@@ -178,6 +179,9 @@ def test_generate_realization_end_to_end(tmp_path):
         assert float(m["nbar_target"]) == b.nbar
         assert m["pk_file"] == PK and len(m["pk_sha256"]) == 64
         assert json.loads(m["psi_rms"]).keys() == {"x", "y", "z"}
+        for key in ("n_clipped_galaxy", "n_clipped_matter"):
+            assert int(m[key]) >= 0
+        float(m["clipped_power_fraction_matter"])
         d = io.read_bin(p, b.index)
         r = np.sqrt(d["x"] ** 2 + d["y"] ** 2 + d["z"] ** 2)
         assert r.min() >= b.rmin and r.max() <= b.rmax

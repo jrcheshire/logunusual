@@ -155,11 +155,10 @@ def power_multipoles(delta_k, box: Box, *, ells=(0, 2, 4), shot_k=None, delta_k_
         mu = np.where(k_mag > 0, kz / k_mag, 0.0).ravel()
     P = P.ravel()
     wsum = np.bincount(idx, weights=herm, minlength=nb + 1)[:nb]
-    n_indep = np.bincount(idx, minlength=nb + 1)[:nb]
     out = {
         "k": 0.5 * (shell_edges(box)[1:] + shell_edges(box)[:-1]),
         "nmodes": wsum,  # full-grid count (the weight of the shell)
-        "n_indep": n_indep,  # rfft half-grid count; kz=0/Nyquist planes hold pairs
+        "n_indep": 0.5 * wsum,  # independent modes, as `gaussian_se` counts them
     }
     for ell in ells:
         contrib = P * _LEGENDRE[ell](mu) * herm
@@ -189,17 +188,23 @@ def shell_average(values_k, box: Box):
 
 
 def gaussian_se(pk_grid, box: Box):
-    """Standard error of the shell-mean power of ONE Gaussian realization with per-mode
-    expectation `pk_grid`: `SE = sqrt(sum P_i^2) / n_indep` over the shell's half-grid
-    modes, each |delta_k|^2 having variance P^2. Also the SE of the Hermitian-weighted
-    mean. Reads low at low k: the half grid's kz = 0 and Nyquist planes still hold both
-    members of each conjugate pair."""
+    """Standard error of the shell-mean power (the Hermitian-weighted mean) of ONE
+    Gaussian realization with per-mode expectation `pk_grid`:
+
+        SE = sqrt(2 sum_c w_c P_c^2) / sum_c w_c        over the shell's half-grid cells
+
+    with `w` the Hermitian weights. Exact: an interior cell stands for itself and its
+    conjugate (Var |delta|^2 = P^2, weight 2); a kz = 0 or Nyquist plane cell and its
+    conjugate are both on the half grid and equal (weight 1 each); a self-conjugate
+    mode is real (Var |delta|^2 = 2 P^2, weight 1). Every case gives `2 w P^2`, so a
+    shell holds `nmodes / 2` independent modes."""
     k_mag, idx, nb = _shell_index(box)
+    herm = np.broadcast_to(hermitian_weights(box), k_mag.shape).ravel()
     P2 = (np.asarray(pk_grid, dtype=np.float64) ** 2).ravel()
-    n_indep = np.bincount(idx, minlength=nb + 1)[:nb]
-    s2 = np.bincount(idx, weights=P2, minlength=nb + 1)[:nb]
+    wsum = np.bincount(idx, weights=herm, minlength=nb + 1)[:nb]
+    s2 = np.bincount(idx, weights=2.0 * herm * P2, minlength=nb + 1)[:nb]
     with np.errstate(invalid="ignore", divide="ignore"):
-        return np.sqrt(s2) / n_indep
+        return np.sqrt(s2) / wsum
 
 
 def kaiser_boost(ell: int, beta: float) -> float:

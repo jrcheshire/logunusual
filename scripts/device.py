@@ -605,6 +605,8 @@ def main():
     p.set_defaults(func=run_pkg)
 
     args = ap.parse_args()
+    if args.mode == "pkg" and args.repeat < 1:
+        ap.error("--repeat must be >= 1 (the first run carries the bitwise self-check)")
     args.func(args)
 
 

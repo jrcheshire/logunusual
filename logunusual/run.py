@@ -254,6 +254,11 @@ def generate_realization(
                 "sigma2_matter": diag["matter"]["sigma2"],
                 "xi_min_galaxy": diag["galaxy"]["xi_min"],
                 "clipped_power_fraction": diag["galaxy"]["clipped_power_fraction"],
+                "clipped_power_fraction_matter": diag["matter"][
+                    "clipped_power_fraction"
+                ],
+                "n_clipped_galaxy": diag["galaxy"]["n_clipped"],
+                "n_clipped_matter": diag["matter"]["n_clipped"],
                 "psi_rms": diag["psi_rms"],
                 "r_edges": stats.r_edges.tolist(),
                 "r_hist": stats.r_hist.tolist(),

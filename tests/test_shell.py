@@ -557,24 +557,40 @@ def test_angular_precut_is_an_exact_superset_of_the_feeding_cells(
             n_kept += keep.sum()
         assert n_kept > 0
         assert np.all(P.reshape(-1)[fed]), "a kept galaxy came from a cut cell"
+
+
+def test_angular_precut_leaves_uncut_slabs_bitwise(spectrum):
+    # Each x-slab draws on its own stream, so the pre-cut can change a slab's galaxies
+    # only if it drops one of that slab's cells. A mask excluding a cap around +x cuts
+    # the high-x slabs only; every other slab must be bitwise unchanged.
+    import healpy as hp
+
+    nside = 16
+    x, _, _ = hp.pix2vec(nside, np.arange(hp.nside2npix(nside)), nest=True)
+    m = shell.AngularMask(x < 0.5, nested=True)
+    box = Box(16, 160.0)
+    s = shell.Shell(20.0, 40.0, 35.0)
+    W = shell.cell_window(box, s)
+    P = shell.angular_precut(box, s, m)
     F = field.generate_fields(spectrum, 1.5, box, 51, psi_axes="xyz")
 
     def run(pre):
-        out = [
+        # one yielded chunk per x-slab, in slab order
+        return [
             k
             for k, _ in shell.sample_shell(
-                F, s, m, 2e-2, 151, f=f, n_workers=1, angular_precut=pre
+                F, s, m, 2e-2, 151, f=0.8, n_workers=1, angular_precut=pre
             )
         ]
-        return np.concatenate(out)
 
     a, b = run(True), run(False)
-    # each slab is its own stream: slabs with no cut cell keep identical galaxies
-    cut_slabs = np.flatnonzero((W & ~P).reshape(box.n_mesh, -1).any(axis=1))
-    sa = np.floor((a[:, 0] + 0.5 * box.box_size) / box.dx).astype(int)
-    sb = np.floor((b[:, 0] + 0.5 * box.box_size) / box.dx).astype(int)
-    same = ~np.isin(np.arange(box.n_mesh), cut_slabs)
-    assert np.array_equal(a[same[sa]], b[same[sb]])
+    assert len(a) == len(b) == box.n_mesh
+    cut = (W & ~P).reshape(box.n_mesh, -1).any(axis=1)
+    assert cut.any() and not cut.all()
+    assert sum(a[i].shape[0] for i in np.flatnonzero(~cut)) > 1000
+    for i in np.flatnonzero(~cut):
+        assert np.array_equal(a[i], b[i]), i
+    assert any(not np.array_equal(a[i], b[i]) for i in np.flatnonzero(cut))
 
 
 def test_radial_histogram_matches_numpy_including_edges():

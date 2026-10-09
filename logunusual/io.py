@@ -58,8 +58,9 @@ def bin_key(index: int, name: str) -> str:
 
 
 def encode_metadata(meta: dict) -> dict:
-    """Every value to `str` (parquet key-value metadata is bytes/str only)."""
-    return {str(k): str(v) for k, v in meta.items()}
+    """Every value to `str` (parquet key-value metadata is bytes/str only); `None` is
+    written as "none"."""
+    return {str(k): "none" if v is None else str(v) for k, v in meta.items()}
 
 
 class CatalogWriter:

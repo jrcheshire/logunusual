@@ -1,10 +1,12 @@
 """Periodic-box statistical checks with per-band tables; writes
 `runs/gates_box/<stamp>_n<N>.json`.
 
-    pixi run python scripts/gates_box.py [--n 128] [--L 1000] [--seeds 48] [--nbar 3e-3]
+    pixi run python scripts/gates_box.py [--n 128] [--L 1000] [--seeds 32]
+        [--seeds-shot 64] [--band-seeds 32] [--nbar 3e-3]
 
-The same `gates` functions back `tests/test_gates_box.py`; this script runs other
-configurations and keeps every number. Bars and their derivation: `docs/validation.md`.
+The same `gates` functions back `tests/test_gates_box.py`, and the defaults are the
+test's settings; this script runs other configurations and keeps every number. Bars
+and their derivation: `docs/validation.md`.
 """
 
 import argparse
@@ -39,14 +41,18 @@ def main():
     ap.add_argument("--n", type=int, default=128)
     ap.add_argument("--L", type=float, default=1000.0)
     ap.add_argument("--est-factor", type=int, default=2)
-    ap.add_argument("--seeds", type=int, default=48)
+    ap.add_argument(
+        "--seeds", type=int, default=32, help="catalog and Kaiser-limit realizations"
+    )
+    ap.add_argument(
+        "--seeds-shot", type=int, default=64, help="uniform-field shot-noise draws"
+    )
     ap.add_argument(
         "--band-seeds",
         type=int,
-        default=None,
-        help="seed count the BANDS are designed for (default: --seeds); more seeds "
-        "than this through the same bands is how a super-Gaussian scatter clears "
-        "the SE floor",
+        default=32,
+        help="seed count the shot-noise BANDS are designed for; more draws than this "
+        "through the same bands is how a super-Gaussian scatter clears the SE floor",
     )
     ap.add_argument("--seeds-field", type=int, default=192)
     ap.add_argument("--nbar", type=float, default=3e-3)
@@ -88,7 +94,7 @@ def main():
         box,
         box_est,
         args.nbar,
-        range(4000, 4000 + args.seeds),
+        range(4000, 4000 + args.seeds_shot),
         band_seeds=args.band_seeds,
     )
     report("uniform-field shot noise vs Jing", e)

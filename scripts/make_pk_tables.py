@@ -1,5 +1,6 @@
 """Input P(k) tables for the v28 bins: linear or halofit CAMB, `# kh\\tPk` TSVs.
 
+    pixi run -e tables pk-tables make-default [--out-dir data]
     pixi run -e tables pk-tables check [--pk-dir data]
     pixi run -e tables pk-tables make --model {linear,halofit} [--kh-max 10]
         [--npoints 12501] [--out-dir data] [--z 0.1 0.3 ...]
@@ -8,9 +9,10 @@ Planck 2018 cosmology, `delta_tot`, log-spaced kh: the v28 tables' CAMB call. `h
 is Takahashi et al. 2012 as CAMB implements it, including the Bird et al. 2012
 massive-neutrino terms; CAMB leaves kh < `Min_kh_nonlinear` (0.005) linear.
 
-`check` regenerates the seven v28 linear tables (kh 1e-4 to 1, 10001 nodes) and
-compares them byte for byte with `<pk-dir>/matterpower_camb_zeff=<z>.tsv`; on a
-mismatch it reports the maximum relative difference and exits 1. `make` writes
+`make-default` writes the seven v28 linear tables (kh 1e-4 to 1, 10001 nodes) under
+the names the default bin table gives them (`Bin.pk_file`); `check` regenerates them
+and compares byte for byte with those files in `--pk-dir`, reporting the maximum
+relative difference and exiting 1 on a mismatch. `make` writes
 `matterpower_camb_{lin,halofit}_kmax<kh-max>_zeff=<z>.tsv`. Runs in the `tables` env
 (CAMB, no JAX); `logunusual.suite` is dependency-free and read from the checkout.
 """
@@ -77,10 +79,8 @@ def tsv_bytes(kh, pk) -> bytes:
     return "".join(lines).encode()
 
 
-def table_name(z, model=None, kh_max=None) -> str:
-    """v28 name (`model` None) or `matterpower_camb_<tag>_kmax<kh_max:g>_zeff=<z:g>`."""
-    if model is None:
-        return f"matterpower_camb_zeff={z:g}.tsv"
+def table_name(z, model, kh_max) -> str:
+    """`make`'s output name: `matterpower_camb_<tag>_kmax<kh_max>_zeff=<z>.tsv`."""
     return f"matterpower_camb_{MODEL_TAG[model]}_kmax{kh_max:g}_zeff={z:g}.tsv"
 
 
@@ -88,10 +88,22 @@ def v28_z():
     return [b.z_eff for b in suite.BIN_SUITE_V28]
 
 
+def make_default(args) -> int:
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for b in suite.BIN_SUITE_V28:
+        blob = tsv_bytes(*make_pk(b.z_eff, "linear", *V28_KH))
+        path = out / b.pk_file
+        path.write_bytes(blob)
+        print(f"{path}: sha256 {hashlib.sha256(blob).hexdigest()}")
+    return 0
+
+
 def check(args) -> int:
     ok = True
-    for z in v28_z():
-        ref_path = Path(args.pk_dir) / table_name(z)
+    for b in suite.BIN_SUITE_V28:
+        z = b.z_eff
+        ref_path = Path(args.pk_dir) / b.pk_file
         ref = ref_path.read_bytes()
         kh, pk = make_pk(z, "linear", *V28_KH)
         new = tsv_bytes(kh, pk)
@@ -125,6 +137,10 @@ def make(args) -> int:
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="mode", required=True)
+    d = sub.add_parser(
+        "make-default", help="write the default bin table's linear tables"
+    )
+    d.add_argument("--out-dir", default="data")
     c = sub.add_parser("check", help="regenerate the v28 linear tables byte for byte")
     c.add_argument("--pk-dir", default="data")
     m = sub.add_parser("make", help="write tables for the v28 z_eff")
@@ -135,7 +151,8 @@ def main():
     m.add_argument("--z", type=float, nargs="+", default=None)
     m.add_argument("--out-dir", default="data")
     args = ap.parse_args()
-    sys.exit(check(args) if args.mode == "check" else make(args))
+    run = {"make-default": make_default, "check": check, "make": make}[args.mode]
+    sys.exit(run(args))
 
 
 if __name__ == "__main__":

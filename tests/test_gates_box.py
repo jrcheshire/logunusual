@@ -37,7 +37,7 @@ def test_lognormal_grid_identity(spectrum):
 def test_uniform_field_shot_noise(spectrum):
     # 64 seeds through bands sized for 32 (`band_seeds`). Bands re-derived per seed
     # count only just meet the SE floor, and the worst band's Gaussian SE does not fall
-    # with seeds (0.576% at 32, 0.643% at 128, floor 0.667%), so a super-Gaussian
+    # with seeds (0.591% at 32, 0.635% at 128, floor 0.667%), so a super-Gaussian
     # Poisson scatter leaves it over; fixed bands with more seeds bring it under.
     e = gates.gate_uniform_shot(BOX, BOX_EST, NBAR, range(4000, 4064), band_seeds=32)
     _report("shot", e)

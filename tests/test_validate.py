@@ -101,6 +101,49 @@ def test_uniform_poisson_catalog_has_jing_shot_noise():
     )
 
 
+def test_gaussian_se_is_the_realization_scatter_at_low_k():
+    # Shell-mean power of many Gaussian realizations: its scatter must equal
+    # `gaussian_se` shell by shell. The first shells are where conjugate pairs on the
+    # kz = 0 plane and the real self-conjugate modes are a large share of the shell
+    # (counting half-grid cells as independent reads 20% low in the first shell).
+    box = Box(16, 160.0)
+    _, _, k = grid.k_grid(box)
+    T = 1.0 / (1.0 + (k / (3 * box.k_f)) ** 2)  # coloured, so the weighting matters
+    T[0, 0, 0] = 0.0
+    pk = T * box.dx**3  # E|rfftn(w)|^2 = N^3 for unit white noise
+    rng = np.random.default_rng(12)
+    n_real, n_shell = 4000, 6
+    P0 = np.empty((n_real, n_shell))
+    for i in range(n_real):
+        dk = np.fft.rfftn(rng.standard_normal((16, 16, 16))) * np.sqrt(T)
+        P0[i] = validate.power_multipoles(dk, box, ells=(0,))["P0"][:n_shell]
+    se = validate.gaussian_se(pk, box)[:n_shell]
+    ratio = P0.std(axis=0, ddof=1) / se
+    # SE of a sample std: 0.5 sqrt((2 + kurtosis_excess) / n), kurtosis measured
+    d = P0 - P0.mean(axis=0)
+    kurt = (d**4).mean(axis=0) / (d**2).mean(axis=0) ** 2 - 3.0
+    tol = 4.0 * 0.5 * np.sqrt((2.0 + kurt) / n_real)
+    assert np.all(np.abs(ratio - 1.0) < tol), (ratio, tol)
+
+
+@pytest.mark.parametrize("n_min", [10, 25, 40, 100])
+def test_bands_count_half_the_full_grid_modes(n_min):
+    from logunusual import gates
+
+    box = Box(16, 160.0)
+    f = np.fft.fftfreq(16) * 2 * np.pi / box.dx
+    kmag = np.sqrt(sum(c**2 for c in np.meshgrid(f, f, f, indexing="ij")))
+    full = np.histogram(kmag[kmag > 0], validate.shell_edges(box))[0]
+    edges = gates.band_edges(box, box.k_nyq, n_min)
+    idx = np.searchsorted(validate.shell_edges(box), edges)
+    per_band = np.add.reduceat(full, idx[:-1])[: len(edges) - 1] / 2
+    assert np.all(per_band >= n_min), per_band
+    # each band closes at the first shell that reaches the count (last one excepted)
+    shells = full / 2
+    for lo, hi in zip(idx[:-2], idx[1:-1]):
+        assert shells[lo : hi - 1].sum() < n_min <= shells[lo:hi].sum()
+
+
 def test_kaiser_formulae():
     assert validate.kaiser_boost(0, 0.0) == 1.0
     assert validate.kaiser_ratio(0.0) == 0.0

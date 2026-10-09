@@ -43,6 +43,7 @@ pixi run test                # pytest -q, slow statistical checks included (~9 m
 pixi run python -m pytest -m "not slow"   # the fast dev loop
 pixi run check-format        # black --check; `pixi run format` applies
 pixi run lint                # flake8, max-line 88, ignore E203
+pixi run -e tables pk-tables make-default   # the default bin table's tables into data/
 pixi run -e tables pk-tables check   # regenerate the v28 linear tables byte for byte
 pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into data/
 ```
@@ -64,9 +65,9 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
   needs `pixi install` and the regenerated lock in the same commit; metadata-only edits
   leave it byte-identical (`pixi install --locked` is the check).
 - `data/`, `outputs/`, `runs/` and all `*.parq*`/`*.npz`/`*.png` are gitignored. Input
-  tables are made into `data/` by `pk-tables make`; a mask is supplied by the user
-  (`data/mask.h5` in the example configs). `tests/data/` holds the one table the tests
-  use.
+  tables are made into `data/` by `pk-tables make-default` / `make`; a mask is supplied
+  by the user (`data/mask.h5` in the example configs). `tests/data/` holds the one
+  table the tests use.
 
 ## Code layout
 
@@ -120,10 +121,10 @@ pixi run -e tables pk-tables make --model halofit   # kh 1e-4..10 tables into da
 - **The target is deconvolved before the lognormal transform** (`P / sinc^2`, uniform
   placement). Deconvolving the field after exponentiation, or using p = 2 jitter,
   breaks attainability (`docs/construction.md`).
-- Mode counts: bands are sized on the rfft half-grid count (`n_indep`), not the
-  Hermitian-weighted full-grid count (`nmodes`, which counts every conjugate pair
-  twice). `n_indep` still double-counts the pairs on the kz = 0 and Nyquist planes
-  (~1/(2n) high in the shell at n k_f), so `gaussian_se` reads low at low k.
+- Mode counts: a shell holds `nmodes / 2` independent modes (`nmodes` the
+  Hermitian-weighted full-grid count). Not the half-grid cell count: the kz = 0 and
+  Nyquist planes hold both members of each conjugate pair, and a self-conjugate mode
+  is real (twice the variance). `validate.gaussian_se` and `gates.band_edges` use it.
   Lognormal power at high k is dominated by rare peaks: realization scatter is far
   above Gaussian and correlated across k, so SEs come from the scatter across
   realizations, never from a formula.

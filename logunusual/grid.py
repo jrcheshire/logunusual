@@ -83,7 +83,8 @@ def k_components(box: Box):
 
 def hermitian_weights(box: Box):
     """Mode multiplicity of the rfft half-grid, shape (1, 1, N//2+1): 1 on the kz = 0
-    and kz = Nyquist planes (self-conjugate), 2 elsewhere. Summing `w * f(k)` over the
+    and kz = Nyquist planes (each cell's conjugate is another cell of the same plane),
+    2 elsewhere (the conjugate is off the half grid). Summing `w * f(k)` over the
     half-grid reproduces the full-grid sum for any even `f`."""
     n = box.n_mesh
     w = np.full(n // 2 + 1, 2.0)

@@ -39,19 +39,24 @@ so that a Gaussian-scatter SE, `1 / sqrt(n_indep n_real)`, meets `TOL / 3`:
 |---|---|---|---|---|
 | `n_min` (independent modes per band) | 1407 | 704 | 352 | 118 |
 
-**Independent modes.** Band sizing counts modes on the rfft half grid (`n_indep` in
-`validate.power_multipoles`), not the Hermitian-weighted full grid (`nmodes`, used only
-as the averaging weight), which counts every conjugate pair twice. The half grid still
-holds both members of each pair on its kz = 0 and Nyquist planes, so `n_indep`
-overcounts the truly independent modes by about 1/(2n) in the shell at n k_f (half
-again at the fundamental, ~5% by the tenth shell). Low-k bands therefore hold somewhat
-fewer independent modes than `n_min`, and `validate.gaussian_se` reads low there.
-Pass/fail never uses that formula: every SE is the measured scatter across
-realizations, and the floor is checked on it.
+**Independent modes.** A shell holds `nmodes / 2` independent modes (`n_indep` in
+`validate.power_multipoles`), with `nmodes` the Hermitian-weighted full-grid count.
+Every case gives the same variance per unit weight: an interior half-grid cell stands
+for itself and its conjugate; on the kz = 0 and Nyquist planes both members of a pair
+are half-grid cells with the same `|delta_k|^2`; a self-conjugate mode is real, so its
+`|delta_k|^2` has twice the variance. Hence `validate.gaussian_se = sqrt(2 sum w P^2) /
+sum w`, and bands are sized on `nmodes / 2`. Counting half-grid cells instead would
+overcount the low shells (by half again at the fundamental) and understate their SE;
+counting the full grid would understate every SE by sqrt 2.
+`tests/test_validate.py::test_gaussian_se_is_the_realization_scatter_at_low_k` checks
+the formula against the scatter of 4000 Gaussian realizations shell by shell. The
+checks' pass/fail SEs are the measured scatter across realizations in any case; the
+formula sizes the bands.
 
 **Bands vs seeds.** `n_min x n_real` is fixed, so re-deriving the bands for more seeds
-leaves the Gaussian SE pinned at the floor (with ~15% headroom in the lowest bands,
-where merged shells overshoot `n_min` least). The lognormal and Poisson scatters are
+leaves the worst band's Gaussian SE pinned near the floor: for the shot-noise check,
+0.591% at 32 seeds, 0.651% at 64 and 0.635% at 128, against 0.667% (the headroom is
+how far merged shells overshoot `n_min`). The lognormal and Poisson scatters are
 super-Gaussian and can spend that headroom. Checks that need margin therefore run more
 seeds through bands built for fewer: `band_seeds=32` with 64 seeds.
 
@@ -109,8 +114,9 @@ The same functions (`logunusual/gates.py`) back two scripts that run larger
 configurations and write JSON (gitignored) under `runs/`:
 
 ```sh
-pixi run python scripts/gates_box.py   [--n 128] [--L 1000] [--seeds 48] \
-    [--band-seeds N] [--seeds-field 192] [--nbar 3e-3] [--bin 5] [--pk PATH]
+pixi run python scripts/gates_box.py   [--n 128] [--L 1000] [--seeds 32] \
+    [--seeds-shot 64] [--band-seeds 32] [--seeds-field 192] [--nbar 3e-3] \
+    [--bin 5] [--pk PATH]
 pixi run python scripts/gates_shell.py [--n 128] [--L 1000] [--seeds 16] \
     [--seeds-response 64] [--band-seeds 32] [--shell RMIN RMAX BUFFER] [--pk PATH]
 ```
@@ -172,8 +178,8 @@ reported to the estimator Nyquist (the alias images) with `|z| < 4` and no floor
 (`gates.gate_fixed_field_sampler`); `scripts/gates_box.py`. Per-band values are printed
 with `-s`.
 
-**Result.** First zone: 52 bands, max |z| 2.0, SE 0.11-0.26%, floor met in every band.
-To the estimator Nyquist: 116 bands, max |z| 2.0.
+**Result.** First zone: 51 bands, max |z| 2.0, SE 0.11-0.26%, floor met in every band.
+To the estimator Nyquist: 115 bands, max |z| 2.0.
 
 ## Catalog monopole
 
@@ -466,8 +472,9 @@ raises).
 **Tests.** That the input linear tables can be rebuilt exactly.
 `pixi run -e tables pk-tables check [--pk-dir data]` regenerates the seven v28 linear
 tables (kh 1e-4 to 1, 10001 nodes) with the pinned CAMB build and compares them byte
-for byte with `<pk-dir>/matterpower_camb_zeff=<z>.tsv`; on a mismatch it prints the
-maximum relative difference and exits 1.
+for byte with the files the default bin table names (`Bin.pk_file`,
+`matterpower_camb_zeff=<z>.tsv`), as written by `pk-tables make-default`; on a mismatch
+it prints the maximum relative difference and exits 1.
 
 **Result.** Byte-identical (about 26 s with `OMP_NUM_THREADS=1`). The `tables`
 environment is osx-arm64 only.
@@ -487,7 +494,8 @@ cells whose galaxies can land in the shell. These are fast, deterministic tests 
 | `test_line_of_sight_guard_counts_a_tangential_displacement_through_the_chord` | a tangential displacement that reaches the shell only through the chord term is counted, at the exact requirement |
 | `test_an_outward_displacement_beyond_the_window_does_not_count` | a large outward displacement beyond the window leaves the requirement unchanged; the same displacement inward raises |
 | `test_a_large_displacement_counts_only_where_it_can_feed_the_shell` | a large displacement in a drawn cell inside the shell does not raise; in an undrawn cell next to the window it does |
-| `test_angular_precut_is_an_exact_superset_of_the_feeding_cells` | band and sparse masks: every kept galaxy, drawn from the full radial window with RSD, comes from a cell the pre-cut keeps; the pre-cut is a strict subset of the radial window; slabs with no cut cell give identical kept galaxies with and without the pre-cut |
+| `test_angular_precut_is_an_exact_superset_of_the_feeding_cells` | band and sparse masks: every kept galaxy, drawn from the full radial window with RSD, comes from a cell the pre-cut keeps; the pre-cut is a strict subset of the radial window |
+| `test_angular_precut_leaves_uncut_slabs_bitwise` | a mask excluding a cap around +x cuts only the high-x slabs; every other slab (holding >1000 kept galaxies) yields identical galaxies with and without the pre-cut, and at least one cut slab differs |
 | `test_mask_dilation_is_the_centre_distance_set` | the mask dilation the pre-cut uses equals the set of pixels within the radius, by brute force |
 | `test_sample_shell_uniform_field_is_poisson_in_the_shell` | `P_in x 1e-4`: `N_kept ~ Poisson(nbar fsky V_shell)` and draws `~ Poisson(sum lambda)`, each `|z| < 4`; flat radial profile; no kept galaxy outside the box |
 
@@ -555,8 +563,8 @@ fundamental modes); every other bin clips nothing.
 | `tests/test_field.py` | deconvolved target; Gaussian colouring reproduces `P_G` in the ensemble (48 seeds, all `|z| < 4.5`, mean z^2 in (0.4, 1.8)); lognormal has zero mean and `1 + delta > 0`; plane-wave displacement is analytic; divergence identity of the three displacement components; f_NL = 0 is the scalar-bias stage bitwise; unattainable f_NL and clipping galaxy tables raise; a galaxy table moves the galaxy field only; `dtype` (f32 stays f32, agrees with f64 within 100 float32 eps of the field maximum, measured 2-22) and `jit` (round-off only, within 20 float64 eps) |
 | `tests/test_sample.py` | intensity sums to `nbar V`; placement inverts to counts and stays in the box; slab streams deterministic, distinct and local; slab-wise draw equals Poisson-then-place; Poisson total; constant displacement translates z; each galaxy moves by its own cell's displacement; `split_seed` |
 | `tests/test_shell.py` | shell validation and `check_box`; radial window vs brute force and the continuum shell volume; mask from h5 in both orderings; selection with inclusive edges against an independent `ang2pix`; radial RSD identities and its far-observer plane-parallel limit; galaxies cross both shell edges; thread-count independence; buffer guard and angular pre-cut (table above); radial histogram including edges; real and redshift space share the draw |
-| `tests/test_validate.py` | multipoles vs brute force; cross power and shot subtraction are linear; CIC conserves mass; uniform Poisson catalog has Jing shot noise; Kaiser formulae; rebinning; effective-window limits and the half-cell image sign |
+| `tests/test_validate.py` | multipoles vs brute force; cross power and shot subtraction are linear; CIC conserves mass; uniform Poisson catalog has Jing shot noise; `gaussian_se` equals the scatter of 4000 Gaussian realizations shell by shell; bands hold `nmodes / 2` modes and close at the first shell reaching `n_min`; Kaiser formulae; rebinning; effective-window limits and the half-cell image sign |
 | `tests/test_fnl.py` | M(k) normalisation and its mutations; growth integral; bias sign, `k^-2` scaling and null cases; f_NL = 0 bitwise; DC handling; zero-crossing diagnostics; M taken from the linear table when a galaxy table is given |
-| `tests/test_io.py` | row-group layout and `check_layout`; bytes independent of how slabs arrive; metadata round trip and empty bins; layout faults detected; descending bins rejected, temporary file cleaned up on error |
+| `tests/test_io.py` | row-group layout and `check_layout`; bytes independent of how slabs arrive; metadata round trip and empty bins; `None` written as `none`; layout faults detected; descending bins rejected, temporary file cleaned up on error |
 | `tests/test_run.py` | config YAML round trip and hash scope (f_NL and galaxy-table keys enter only when set); bin scaling; end-to-end realizations (Gaussian, f_NL, galaxy table); uniform input is Poisson through the driver; two processes write the same bytes; CLI commands |
 | `tests/test_suite.py` | v28 bin table: indices, shells tile z and r without gaps, boxes hold the buffered shells, cell sizes; growth-rate literals equal `fnl.growth_rate_md` and match a finite difference of `ln D`; seed schedule is collision-free; table file names |
